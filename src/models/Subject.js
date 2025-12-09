@@ -3,11 +3,19 @@
 // ============================================
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
+
 const subjectSchema = new Schema({
     name: {
         type: String,
         required: true,
         unique: true,
+        trim: true
+    },
+    code: {
+        type: String,
+        required: true,
+        unique: true,
+        uppercase: true,
         trim: true
     },
     description: {
@@ -24,6 +32,8 @@ const subjectSchema = new Schema({
     },
     credits: {
         type: Number,
+        min: 1,
+        max: 10,
         default: 3
     },
     isActive: {
@@ -38,7 +48,11 @@ const subjectSchema = new Schema({
     timestamps: true
 });
 
-subjectSchema.index({ code: 1 });
-subjectSchema.index({ semester: 1, department: 1 });
+// Ensure both name & code are unique
+subjectSchema.index({ name: 1 }, { unique: true });
+subjectSchema.index({ code: 1 }, { unique: true });
+
+// Optional: useful for filtering
+subjectSchema.index({ department: 1, semester: 1 });
 
 module.exports = mongoose.model('Subject', subjectSchema);

@@ -1,19 +1,31 @@
-// routes/quizzes.routes.js
+// routes/quizzes.routes.js - FIXED VERSION
 const express = require('express');
 const quizzesController = require('../controllers/quizzes.controller');
 const authMiddleware = require('../middlewares/auth.middleware');
 const { authorize } = require('../middlewares/role.middleware');
 const multer = require('multer');
-const upload = multer({ dest: 'uploads/' }); // simple disk storage, you can customize
+const upload = multer({ dest: 'uploads/' });
 
 const { validateRequest, validationSchemas, Joi, Segments } = require('../middlewares/validation.middleware');
 
 const router = express.Router();
 
-// GET /api/quizzes
-router.get('/', quizzesController.listQuizzes);
+//! Get all the enrolled quiz which enrolled by me 
+// GET /api/quizzes/enrolled
+// Get enrolled quizzes (Student only)
+router.get('/enrolled',
+    authMiddleware,
+    authorize('student'),
+    quizzesController.getMyEnrolledQuizzes
+);
 
+// GET /api/quizzes
+router.get('/',
+    authMiddleware,
+    quizzesController.listQuizzes
+);
 // GET /api/quizzes/:id
+// Get single quiz
 router.get('/:id',
     authMiddleware,
     validateRequest({
@@ -77,8 +89,7 @@ router.post('/',
                 randomizeQuestionOrder: Joi.boolean()
             })
         })
-    })
-,
+    }),
     quizzesController.createQuiz
 );
 
@@ -106,10 +117,9 @@ router.patch('/:id/publish',
     quizzesController.publishQuiz
 );
 
+// Quiz Question Management Routes
 
-//Quize Question Management Routes
-
-//!Get Questions of a Quiz
+//! Get Questions of a Quiz
 router.get('/:id/questions',
     authMiddleware,
     authorize('trainer', 'admin'),
@@ -120,8 +130,8 @@ router.get('/:id/questions',
     }),
     quizzesController.getQuizQuestions
 );
-// POST /api/quizzes/:id/questions
-// → Attach an existing question (from question bank) to this quiz
+
+// POST /api/quizzes/:id/questions - Attach existing question
 router.post('/:id/questions',
     authMiddleware,
     authorize('trainer', 'admin'),
@@ -137,7 +147,6 @@ router.post('/:id/questions',
 );
 
 // DELETE /api/quizzes/:id/questions/:questionId
-// → Remove a question from this quiz
 router.delete('/:id/questions/:questionId',
     authMiddleware,
     authorize('trainer', 'admin'),
@@ -150,8 +159,7 @@ router.delete('/:id/questions/:questionId',
     quizzesController.removeQuestionFromQuiz
 );
 
-//Bulk upload question
-
+// Bulk upload questions
 router.post('/:id/questions/bulk-upload',
     authMiddleware,
     authorize('trainer', 'admin'),
@@ -163,6 +171,7 @@ router.post('/:id/questions/bulk-upload',
     upload.single('file'),
     quizzesController.bulkUploadQuestions
 );
+
 // POST /api/quizzes/:id/questions/manual
 router.post('/:id/questions/manual',
     authMiddleware,
@@ -188,6 +197,7 @@ router.post('/:id/questions/manual',
 );
 
 // STUDENT ENROLLMENT ROUTE
+// Enroll in quiz (Student only)
 router.post('/:id/enroll',
     authMiddleware,
     authorize('student'),
@@ -199,9 +209,7 @@ router.post('/:id/enroll',
     quizzesController.enrollInQuiz
 );
 
-
-
-//! Start Quize 
+//! Start Quiz 
 router.post('/:id/start',
     authMiddleware,
     authorize('student'),
@@ -212,6 +220,9 @@ router.post('/:id/start',
     }),
     quizzesController.startQuiz
 );
+
+// ✅ FIXED: Submit Quiz - Added clientFingerprint validation
+// Submit quiz (Student only)
 router.post('/:attemptId/submit',
     authMiddleware,
     authorize('student'),
@@ -226,15 +237,18 @@ router.post('/:attemptId/submit',
                     answer: Joi.alternatives().try(
                         Joi.string(),
                         Joi.array().items(Joi.string())
-                    ).required()
+                    ).required(),
+                    clientTimestamp: Joi.date().optional()
                 })
-            ).required()
+            ).required(),
+            tabSwitches: Joi.number().min(0).default(0),
+            timeSpentSeconds: Joi.number().min(0).optional(),
+            isAutoSubmit: Joi.boolean().default(false),
+            clientFingerprint: Joi.string().optional()
         })
     }),
     quizzesController.submitQuiz
 );
-
-
 
 // Get all attempt history for a quiz (student)
 router.get('/:id/my-attempts',
@@ -249,6 +263,7 @@ router.get('/:id/my-attempts',
 );
 
 // Get a single attempt detail (student)
+// Get single attempt detail (Student only - own attempts)
 router.get('/attempts/:attemptId',
     authMiddleware,
     authorize('student'),
@@ -260,8 +275,96 @@ router.get('/attempts/:attemptId',
     quizzesController.getMyAttemptDetail
 );
 
+// ✅ FIXED: Auto-save - Added clientTimestamp validation
+router.post('/:attemptId/auto-save',
+    authMiddleware,
+    authorize('student'),
+    validateRequest({
+        [Segments.PARAMS]: Joi.object({
+            attemptId: validationSchemas.objectId.required()
+        }),
+        [Segments.BODY]: Joi.object({
+            answers: Joi.array().items(
+                Joi.object({
+                    questionId: validationSchemas.objectId.required(),
+                    answer: Joi.alternatives().try(
+                        Joi.string(),
+                        Joi.array().items(Joi.string())
+                    ).allow(null),
+                    clientTimestamp: Joi.date().optional()
+                })
+            ),
+            tabSwitches: Joi.number().min(0).default(0)
+        })
+    }),
+    quizzesController.autoSaveAnswers
+);
+
+
+// ============================================
+// ENROLLMENT & ATTEMPT TRACKING (Trainer/Admin)
+// ============================================
+// Get all enrollments for a quiz (Trainer/Admin - with ownership check)
+router.get('/:id/enrollments',
+    authMiddleware,
+    authorize('trainer', 'admin'),
+    validateRequest({
+        [Segments.PARAMS]: Joi.object({
+            id: validationSchemas.objectId.required()
+        }),
+        [Segments.QUERY]: Joi.object({
+            page: Joi.number().min(1).default(1),
+            limit: Joi.number().min(1).max(100).default(20),
+            search: Joi.string().allow('').optional()
+        })
+    }),
+    (req, res, next) => quizzesController.getQuizEnrollments(req, res, next)
+);
+// Get all attempts for a quiz (Trainer/Admin - with ownership check)
+router.get('/:id/attempts',
+    authMiddleware,
+    authorize('trainer', 'admin'),
+    validateRequest({
+        [Segments.PARAMS]: Joi.object({
+            id: validationSchemas.objectId.required()
+        }),
+        [Segments.QUERY]: Joi.object({
+            page: Joi.number().min(1).default(1),
+            limit: Joi.number().min(1).max(100).default(20),
+            status: Joi.string().valid(
+                'in_progress', 'submitted', 'auto_graded', 'needs_manual_review',
+                'manually_graded', 'flagged', 'timeout', 'abandoned'
+            ).optional(),
+            studentId: validationSchemas.objectId.optional(),
+            search: Joi.string().allow('').optional()   // FIX 2 (explained below)
+        })
+    }),
+    (req, res, next) => quizzesController.getQuizAttempts(req, res, next)
+);
+// Get detailed attempt (Trainer/Admin - with ownership check)
+// Get detailed attempt (Trainer/Admin - with ownership check)
+router.get('/:id/attempts/:attemptId/details',
+    authMiddleware,
+    authorize('trainer', 'admin'),
+    validateRequest({
+        [Segments.PARAMS]: Joi.object({
+            id: validationSchemas.objectId.required(),
+            attemptId: validationSchemas.objectId.required()
+        })
+    }),
+    (req, res, next) => quizzesController.getAttemptDetails(req, res, next)
+);
+// Quiz statistics
+router.get('/:id/statistics',
+    authMiddleware,
+    authorize('trainer', 'admin'),
+    validateRequest({
+        [Segments.PARAMS]: Joi.object({
+            id: validationSchemas.objectId.required()
+        })
+    }),
+    (req, res, next) => quizzesController.getQuizStatistics(req, res, next)
+);
+
 
 module.exports = router;
-
-
-

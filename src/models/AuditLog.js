@@ -91,3 +91,4 @@ auditSchema.index({ severity: 1, timestamp: -1 });
 auditSchema.index({ timestamp: 1 }, { expireAfterSeconds: 15552000 }); // 180 days
 
 module.exports = mongoose.model('AuditLog', auditSchema);
+

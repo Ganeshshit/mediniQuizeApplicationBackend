@@ -54,9 +54,13 @@ const startServer = async () => {
         await connectDB();
         logger.info('MongoDB connected successfully');
 
-        server.listen(config.port, () => {
-            logger.info(`Server running on port ${config.port} in ${config.env} mode`);
+        // server.listen(config.port, () => {
+        //     logger.info(`Server running on port ${config.port} in ${config.env} mode`);
+        // });
+        server.listen(config.port, "0.0.0.0", () => {
+            logger.info(`Server running on http://0.0.0.0:${config.port}`);
         });
+
     } catch (error) {
         logger.error('Failed to start server:', error);
         process.exit(1);

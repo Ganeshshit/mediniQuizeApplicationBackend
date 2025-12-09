@@ -7,10 +7,8 @@ const { validateRequest, validationSchemas, Joi, Segments } = require('../middle
 
 const router = express.Router();
 
-// GET /api/subjects
 router.get('/', authMiddleware, subjectsController.listSubjects);
 
-// POST /api/subjects (Trainer/Admin)
 router.post('/',
     authMiddleware,
     authorize('trainer', 'admin'),
@@ -23,12 +21,10 @@ router.post('/',
             semester: Joi.number().min(1).max(12),
             credits: Joi.number().min(1).max(10)
         })
-    })
-,
+    }),
     subjectsController.createSubject
 );
 
-// PUT /api/subjects/:id (Trainer/Admin)
 router.put('/:id',
     authMiddleware,
     authorize('trainer', 'admin'),
@@ -44,7 +40,6 @@ router.put('/:id',
     subjectsController.updateSubject
 );
 
-// DELETE /api/subjects/:id (Admin)
 router.delete('/:id',
     authMiddleware,
     authorize('admin'),
