@@ -5,37 +5,61 @@ const mongoSanitize = require('express-mongo-sanitize');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const logger = require('./config/logger');
-const config = require('./config');
 const routes = require('./routes');
 const { errorHandler, notFoundHandler } = require('./middlewares/error.middleware');
 
 const app = express();
 
-// Security middleware
+// ---------------------------------------------
+// TRUST PROXY (Render + rate-limit)
+// ---------------------------------------------
+app.set("trust proxy", 1);
+
+// ---------------------------------------------
+// SECURITY HEADERS
+// ---------------------------------------------
 app.use(helmet());
+
+// ---------------------------------------------
+// FIX CORS COMPLETELY (Accept All Origins + All Headers)
+// ---------------------------------------------
 app.use(cors({
-    origin: config.corsOrigins,
-    credentials: true,
-    optionsSuccessStatus: 200
+    origin: "*",  // allows localhost + LAN + any frontend
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["*"], // <-- FIXES x-request-id error
+    exposedHeaders: ["*"],
 }));
-app.use(mongoSanitize()); // Prevent NoSQL injection
+
+// Preflight support
+app.options("*", cors());
+
+// ---------------------------------------------
+// SANITIZATION + COMPRESSION
+// ---------------------------------------------
+app.use(mongoSanitize());
 app.use(compression());
 
-// Body parsing
+// ---------------------------------------------
+// BODY PARSING
+// ---------------------------------------------
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Rate limiting (global)
+// ---------------------------------------------
+// RATE LIMITING (global)
+// ---------------------------------------------
 const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // limit each IP to 100 requests per windowMs
+    windowMs: 15 * 60 * 1000,
+    max: 100,
     message: 'Too many requests from this IP, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
 });
 app.use('/api/', limiter);
 
-// Request logging
+// ---------------------------------------------
+// REQUEST LOGGING
+// ---------------------------------------------
 app.use((req, res, next) => {
     logger.info(`${req.method} ${req.path}`, {
         ip: req.ip,
@@ -44,15 +68,21 @@ app.use((req, res, next) => {
     next();
 });
 
-// Health check
+// ---------------------------------------------
+// HEALTH CHECK
+// ---------------------------------------------
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// API routes
+// ---------------------------------------------
+// API ROUTES
+// ---------------------------------------------
 app.use('/api/v1', routes);
 
-// Error handlers (must be last)
+// ---------------------------------------------
+// ERROR HANDLERS (last)
+// ---------------------------------------------
 app.use(notFoundHandler);
 app.use(errorHandler);
 
