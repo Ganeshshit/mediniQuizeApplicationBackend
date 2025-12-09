@@ -23,22 +23,172 @@ const sendEmail = async (to, subject, html) => {
 // REGISTER STUDENT
 // POST /api/auth/register
 // ==================================================
+// exports.register = async (req, res) => {
+//     try {
+//         const {
+//             name,
+//             email,
+//             password,
+
+//             // Required student fields
+//             rollNo,
+//             registrationNo,
+//             semester,
+//             department,
+//             batch,
+//             softwareSkills,
+
+//             // Optional fields
+//             programmingLanguages,
+//             phone,
+//             gender,
+//             dateOfBirth,
+//             address,
+//             cgpa,
+//             previousEducation
+//         } = req.body;
+
+//         // -----------------------------------------
+//         // Validate required fields
+//         // -----------------------------------------
+//         const missing = [];
+
+//         if (!name) missing.push("name");
+//         if (!email) missing.push("email");
+//         if (!password) missing.push("password");
+//         if (!rollNo) missing.push("rollNo");
+//         if (!registrationNo) missing.push("registrationNo");
+//         if (!semester) missing.push("semester");
+//         if (!department) missing.push("department");
+//         if (!batch) missing.push("batch");
+
+//         if (!softwareSkills || !Array.isArray(softwareSkills) || softwareSkills.length === 0) {
+//             missing.push("softwareSkills[] (at least 1 required)");
+//         }
+
+//         if (missing.length > 0) {
+//             return res.status(400).json({
+//                 error: "Missing required fields",
+//                 missing
+//             });
+//         }
+
+//         // -----------------------------------------
+//         // Check existing user
+//         // -----------------------------------------
+//         const emailExists = await User.findOne({ email });
+//         if (emailExists) {
+//             return res.status(400).json({ error: "Email already registered" });
+//         }
+
+//         // -----------------------------------------
+//         // Validate password strength
+//         // -----------------------------------------
+//         const passwordCheck = PasswordUtil.validate(password);
+//         if (!passwordCheck.valid) {
+//             return res.status(400).json({
+//                 error: "Weak password",
+//                 details: passwordCheck.errors
+//             });
+//         }
+
+//         // -----------------------------------------
+//         // Hash password
+//         // -----------------------------------------
+//         const passwordHash = await PasswordUtil.hash(password);
+
+//         // -----------------------------------------
+//         // Generate verification token
+//         // -----------------------------------------
+//         const verificationToken = crypto.randomBytes(32).toString("hex");
+//         const verificationTokenExpiry = Date.now() + 24 * 60 * 60 * 1000;
+
+//         // -----------------------------------------
+//         // Create Student User
+//         // -----------------------------------------
+//         const user = await User.create({
+//             email,
+//             passwordHash,
+//             name,
+//             role: "student",       // FORCE ROLE ALWAYS STUDENT
+//             rollNo,
+//             registrationNo,
+//             semester,
+//             department,
+//             batch,
+//             softwareSkills,
+//             programmingLanguages,
+//             phone,
+//             gender,
+//             dateOfBirth,
+//             address,
+//             cgpa,
+//             previousEducation,
+
+//             isVerified: false,
+//             verificationToken,
+//             verificationTokenExpiry
+//         });
+
+//         // -----------------------------------------
+//         // Send verification email
+//         // -----------------------------------------
+//         const verifyURL = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
+
+//         await sendEmail(
+//             email,
+//             "Verify Your Account",
+//             `
+//                 <h2>Hello ${name}</h2>
+//                 <p>Please verify your email:</p>
+//                 <a href="${verifyURL}">${verifyURL}</a>
+//             `
+//         );
+
+//         // -----------------------------------------
+//         // Generate JWT
+//         // -----------------------------------------
+//         const tokens = JWTUtil.generateTokenPair(user._id, "student");
+
+//         return res.status(201).json({
+//             message: "Registration successful. Please verify your email.",
+//             user: {
+//                 _id: user._id,
+//                 name: user.name,
+//                 email: user.email,
+//                 role: user.role,
+//                 rollNo: user.rollNo,
+//                 registrationNo: user.registrationNo,
+//                 semester: user.semester,
+//                 department: user.department,
+//                 batch: user.batch,
+//                 isVerified: user.isVerified
+//             },
+//             ...tokens
+//         });
+
+//     } catch (err) {
+//         console.error("REGISTER ERROR:", err);
+//         return res.status(500).json({
+//             error: "Registration failed",
+//             details: err.message
+//         });
+//     }
+// };
 exports.register = async (req, res) => {
     try {
         const {
             name,
             email,
             password,
+            department,
 
-            // Required student fields
+            // Optional fields
             rollNo,
             registrationNo,
             semester,
-            department,
             batch,
             softwareSkills,
-
-            // Optional fields
             programmingLanguages,
             phone,
             gender,
@@ -48,23 +198,12 @@ exports.register = async (req, res) => {
             previousEducation
         } = req.body;
 
-        // -----------------------------------------
-        // Validate required fields
-        // -----------------------------------------
+        // Required minimal fields
         const missing = [];
-
         if (!name) missing.push("name");
         if (!email) missing.push("email");
         if (!password) missing.push("password");
-        if (!rollNo) missing.push("rollNo");
-        if (!registrationNo) missing.push("registrationNo");
-        if (!semester) missing.push("semester");
         if (!department) missing.push("department");
-        if (!batch) missing.push("batch");
-
-        if (!softwareSkills || !Array.isArray(softwareSkills) || softwareSkills.length === 0) {
-            missing.push("softwareSkills[] (at least 1 required)");
-        }
 
         if (missing.length > 0) {
             return res.status(400).json({
@@ -73,17 +212,13 @@ exports.register = async (req, res) => {
             });
         }
 
-        // -----------------------------------------
-        // Check existing user
-        // -----------------------------------------
+        // Check if email exists
         const emailExists = await User.findOne({ email });
         if (emailExists) {
             return res.status(400).json({ error: "Email already registered" });
         }
 
-        // -----------------------------------------
-        // Validate password strength
-        // -----------------------------------------
+        // Password strength validation
         const passwordCheck = PasswordUtil.validate(password);
         if (!passwordCheck.valid) {
             return res.status(400).json({
@@ -92,29 +227,25 @@ exports.register = async (req, res) => {
             });
         }
 
-        // -----------------------------------------
         // Hash password
-        // -----------------------------------------
         const passwordHash = await PasswordUtil.hash(password);
 
-        // -----------------------------------------
-        // Generate verification token
-        // -----------------------------------------
+        // Email verification token
         const verificationToken = crypto.randomBytes(32).toString("hex");
         const verificationTokenExpiry = Date.now() + 24 * 60 * 60 * 1000;
 
-        // -----------------------------------------
-        // Create Student User
-        // -----------------------------------------
+        // Create user
         const user = await User.create({
+            name,
             email,
             passwordHash,
-            name,
-            role: "student",       // FORCE ROLE ALWAYS STUDENT
+            role: "student",
+            department,
+
+            // Optional fields (only saved if sent)
             rollNo,
             registrationNo,
             semester,
-            department,
             batch,
             softwareSkills,
             programmingLanguages,
@@ -130,14 +261,12 @@ exports.register = async (req, res) => {
             verificationTokenExpiry
         });
 
-        // -----------------------------------------
         // Send verification email
-        // -----------------------------------------
         const verifyURL = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
 
         await sendEmail(
             email,
-            "Verify Your Account",
+            "Verify Your Email",
             `
                 <h2>Hello ${name}</h2>
                 <p>Please verify your email:</p>
@@ -145,9 +274,7 @@ exports.register = async (req, res) => {
             `
         );
 
-        // -----------------------------------------
-        // Generate JWT
-        // -----------------------------------------
+        // Create tokens
         const tokens = JWTUtil.generateTokenPair(user._id, "student");
 
         return res.status(201).json({
@@ -156,12 +283,8 @@ exports.register = async (req, res) => {
                 _id: user._id,
                 name: user.name,
                 email: user.email,
-                role: user.role,
-                rollNo: user.rollNo,
-                registrationNo: user.registrationNo,
-                semester: user.semester,
                 department: user.department,
-                batch: user.batch,
+                role: user.role,
                 isVerified: user.isVerified
             },
             ...tokens

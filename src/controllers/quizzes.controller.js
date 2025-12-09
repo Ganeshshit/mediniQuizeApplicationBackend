@@ -66,6 +66,157 @@ class QuizzesController {
    *  - FULL details ONLY if enrolled
    *  - Otherwise basic details with isEnrolled=false
    */
+    // async listQuizzes(req, res, next) {
+    //     try {
+    //         const {
+    //             page = 1,
+    //             limit = 10,
+    //             subject,
+    //             search,
+    //             published,
+    //             difficulty,
+    //             sortBy = 'createdAt',
+    //             sortOrder = 'desc'
+    //         } = req.query;
+
+    //         const query = {};
+
+    //         // Role-based filtering
+    //         if (req.user && (req.user.role === "trainer" || req.user.role === "admin")) {
+    //             if (published !== undefined) {
+    //                 query.isPublished = published === "true";
+    //             }
+    //         } else {
+    //             query.isPublished = true;
+    //             // Only show quizzes within time window for students
+    //             const now = new Date();
+    //             query.startTime = { $lte: now };
+    //             query.endTime = { $gte: now };
+    //         }
+
+    //         // Filters
+    //         if (subject) query.subject = subject;
+    //         if (search) {
+    //             query.$or = [
+    //                 { title: { $regex: search, $options: "i" } },
+    //                 { description: { $regex: search, $options: "i" } }
+    //             ];
+    //         }
+
+    //         const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    //         // Sorting
+    //         const sortOptions = {};
+    //         sortOptions[sortBy] = sortOrder === 'asc' ? 1 : -1;
+
+    //         const [quizzes, total] = await Promise.all([
+    //             Quiz.find(query)
+    //                 .populate("subject", "name description")
+    //                 .populate("createdBy", "name email")
+    //                 .select("-questionIds -questionPoolFilter")
+    //                 .sort(sortOptions)
+    //                 .skip(skip)
+    //                 .limit(parseInt(limit))
+    //                 .lean(),
+    //             Quiz.countDocuments(query)
+    //         ]);
+
+    //         // Enhanced student response with enrollment and attempt data
+    //         if (req.user && req.user.role === "student") {
+    //             const studentId = req.user._id;
+    //             const quizIds = quizzes.map(q => q._id);
+
+    //             // Batch fetch enrollments and attempts
+    //             const [enrollments, attempts] = await Promise.all([
+    //                 QuizEnrollment.find({
+    //                     quiz: { $in: quizIds },
+    //                     student: studentId
+    //                 }).lean(),
+    //                 QuizAttempt.aggregate([
+    //                     {
+    //                         $match: {
+    //                             quiz: { $in: quizIds },
+    //                             user: studentId
+    //                         }
+    //                     },
+    //                     {
+    //                         $group: {
+    //                             _id: '$quiz',
+    //                             count: { $sum: 1 },
+    //                             bestScore: { $max: '$totalScore' },
+    //                             lastAttempt: { $max: '$startTime' }
+    //                         }
+    //                     }
+    //                 ])
+    //             ]);
+
+    //             const enrollmentMap = new Map(
+    //                 enrollments.map(e => [e.quiz.toString(), e])
+    //             );
+    //             const attemptMap = new Map(
+    //                 attempts.map(a => [a._id.toString(), a])
+    //             );
+
+    //             const result = quizzes.map(quiz => {
+    //                 const quizId = quiz._id.toString();
+    //                 const isEnrolled = enrollmentMap.has(quizId);
+    //                 const attemptData = attemptMap.get(quizId);
+
+    //                 if (!isEnrolled) {
+    //                     return {
+    //                         _id: quiz._id,
+    //                         title: quiz.title,
+    //                         description: quiz.description,
+    //                         subject: quiz.subject,
+    //                         durationMinutes: quiz.durationMinutes,
+    //                         totalMarks: quiz.totalMarks,
+    //                         startTime: quiz.startTime,
+    //                         endTime: quiz.endTime,
+    //                         isEnrolled: false,
+    //                         canEnroll: true
+    //                     };
+    //                 }
+
+    //                 return {
+    //                     ...quiz,
+    //                     isEnrolled: true,
+    //                     attemptCount: attemptData?.count || 0,
+    //                     attemptsRemaining: quiz.attemptsAllowed - (attemptData?.count || 0),
+    //                     bestScore: attemptData?.bestScore || null,
+    //                     lastAttemptDate: attemptData?.lastAttempt || null,
+    //                     canAttempt: (attemptData?.count || 0) < quiz.attemptsAllowed
+    //                 };
+    //             });
+
+    //             return res.json({
+    //                 success: true,
+    //                 data: result,
+    //                 pagination: {
+    //                     page: parseInt(page),
+    //                     limit: parseInt(limit),
+    //                     total,
+    //                     pages: Math.ceil(total / parseInt(limit))
+    //                 }
+    //             });
+    //         }
+
+    //         // Trainer/Admin response
+    //         return res.json({
+    //             success: true,
+    //             data: quizzes,
+    //             pagination: {
+    //                 page: parseInt(page),
+    //                 limit: parseInt(limit),
+    //                 total,
+    //                 pages: Math.ceil(total / parseInt(limit))
+    //             }
+    //         });
+
+    //     } catch (error) {
+    //         logger.error("List quizzes error:", error);
+    //         next(error);
+    //     }
+    // }
     async listQuizzes(req, res, next) {
         try {
             const {
@@ -87,11 +238,11 @@ class QuizzesController {
                     query.isPublished = published === "true";
                 }
             } else {
+                // ✅ FIX: Students only see published quizzes (no time filter)
                 query.isPublished = true;
-                // Only show quizzes within time window for students
-                const now = new Date();
-                query.startTime = { $lte: now };
-                query.endTime = { $gte: now };
+
+                // OPTIONAL: Add status filter to exclude drafts
+                // query.status = { $in: ['published', 'ready'] };
             }
 
             // Filters
@@ -157,10 +308,17 @@ class QuizzesController {
                     attempts.map(a => [a._id.toString(), a])
                 );
 
+                const now = new Date();
+
                 const result = quizzes.map(quiz => {
                     const quizId = quiz._id.toString();
                     const isEnrolled = enrollmentMap.has(quizId);
                     const attemptData = attemptMap.get(quizId);
+
+                    // ✅ FIX: Calculate time-based availability
+                    const hasStarted = !quiz.startTime || new Date(quiz.startTime) <= now;
+                    const hasEnded = quiz.endTime && new Date(quiz.endTime) < now;
+                    const isActive = hasStarted && !hasEnded;
 
                     if (!isEnrolled) {
                         return {
@@ -173,18 +331,29 @@ class QuizzesController {
                             startTime: quiz.startTime,
                             endTime: quiz.endTime,
                             isEnrolled: false,
-                            canEnroll: true
+                            canEnroll: true,
+                            // ✅ NEW: Time status indicators
+                            isActive: isActive,
+                            hasStarted: hasStarted,
+                            hasEnded: hasEnded
                         };
                     }
+
+                    const attemptsUsed = attemptData?.count || 0;
+                    const canAttempt = isActive && attemptsUsed < quiz.attemptsAllowed;
 
                     return {
                         ...quiz,
                         isEnrolled: true,
-                        attemptCount: attemptData?.count || 0,
-                        attemptsRemaining: quiz.attemptsAllowed - (attemptData?.count || 0),
+                        attemptCount: attemptsUsed,
+                        attemptsRemaining: quiz.attemptsAllowed - attemptsUsed,
                         bestScore: attemptData?.bestScore || null,
                         lastAttemptDate: attemptData?.lastAttempt || null,
-                        canAttempt: (attemptData?.count || 0) < quiz.attemptsAllowed
+                        canAttempt: canAttempt,
+                        // ✅ NEW: Time status indicators
+                        isActive: isActive,
+                        hasStarted: hasStarted,
+                        hasEnded: hasEnded
                     };
                 });
 
@@ -1418,6 +1587,336 @@ class QuizzesController {
     }
 
 
+    // async startQuiz(req, res, next) {
+    //     const session = await mongoose.startSession();
+    //     session.startTransaction();
+
+    //     try {
+    //         const { id: quizId } = req.params;
+    //         const studentId = req.user._id;
+
+    //         // Security: Capture comprehensive client info
+    //         const clientIP = (req.headers['x-forwarded-for'] ||
+    //             req.connection.remoteAddress ||
+    //             req.socket.remoteAddress).split(',')[0].trim();
+
+    //         const userAgent = req.headers['user-agent'];
+    //         const fingerprint = req.headers['x-client-fingerprint'] || null;
+
+    //         // Validate quiz exists
+    //         const quiz = await Quiz.findById(quizId)
+    //             .populate("subject", "name")
+    //             .session(session);
+
+    //         if (!quiz) {
+    //             await session.abortTransaction();
+    //             return res.status(404).json({
+    //                 success: false,
+    //                 error: "Quiz not found"
+    //             });
+    //         }
+
+    //         // Security: Published check
+    //         if (!quiz.isPublished) {
+    //             await session.abortTransaction();
+    //             return res.status(403).json({
+    //                 success: false,
+    //                 error: "Quiz is not published"
+    //             });
+    //         }
+
+    //         // Security: Enrollment check
+    //         const enrollment = await QuizEnrollment.findOne({
+    //             quiz: quizId,
+    //             student: studentId
+    //         }).session(session);
+
+    //         if (!enrollment) {
+    //             await session.abortTransaction();
+    //             return res.status(403).json({
+    //                 success: false,
+    //                 error: "You must enroll to start this quiz"
+    //             });
+    //         }
+
+    //         // Security: Time window validation
+    //         const now = new Date();
+    //         if (now < quiz.startTime) {
+    //             await session.abortTransaction();
+    //             return res.status(403).json({
+    //                 success: false,
+    //                 error: "Quiz has not started yet",
+    //                 availableFrom: quiz.startTime,
+    //                 serverTime: now
+    //             });
+    //         }
+
+    //         if (now > quiz.endTime) {
+    //             await session.abortTransaction();
+    //             return res.status(403).json({
+    //                 success: false,
+    //                 error: "Quiz has ended",
+    //                 endedAt: quiz.endTime,
+    //                 serverTime: now
+    //             });
+    //         }
+
+    //         // Security: Check attempt limits
+    //         const completedAttempts = await QuizAttempt.countDocuments({
+    //             quiz: quizId,
+    //             user: studentId,
+    //             status: { $in: ['submitted', 'auto_graded', 'timeout', 'manually_graded'] }
+    //         }).session(session);
+
+    //         if (completedAttempts >= quiz.attemptsAllowed) {
+    //             await session.abortTransaction();
+    //             return res.status(403).json({
+    //                 success: false,
+    //                 error: "Maximum attempts reached",
+    //                 attemptCount: completedAttempts,
+    //                 attemptsAllowed: quiz.attemptsAllowed
+    //             });
+    //         }
+
+    //         // Resume: Check for existing in-progress attempt
+    //         let activeAttempt = await QuizAttempt.findOne({
+    //             quiz: quizId,
+    //             user: studentId,
+    //             status: "in_progress"
+    //         }).session(session);
+
+    //         if (activeAttempt) {
+    //             const attemptStartTime = new Date(activeAttempt.startTime);
+    //             const durationMs = quiz.durationMinutes * 60 * 1000;
+    //             const elapsed = Date.now() - attemptStartTime.getTime();
+    //             const gracePeriod = 60000; // 1 minute grace
+
+    //             if (elapsed > (durationMs + gracePeriod)) {
+    //                 // Time expired, auto-submit
+    //                 activeAttempt.status = "timeout";
+    //                 activeAttempt.endTime = new Date();
+    //                 activeAttempt.timeSpentSeconds = Math.floor(elapsed / 1000);
+    //                 activeAttempt.isFlagged = true;
+    //                 activeAttempt.flaggedReasons.push({
+    //                     reason: "Attempt resumed after time limit expired",
+    //                     timestamp: new Date(),
+    //                     severity: "high",
+    //                     details: `Elapsed: ${Math.floor(elapsed / 1000)}s, Allowed: ${quiz.durationMinutes * 60}s`
+    //                 });
+    //                 await activeAttempt.save({ session });
+    //                 await session.commitTransaction();
+
+    //                 return res.status(400).json({
+    //                     success: false,
+    //                     error: "Previous attempt expired",
+    //                     timeExpired: true,
+    //                     attemptId: activeAttempt._id
+    //                 });
+    //             }
+
+    //             // Validate attempt integrity
+    //             if (!activeAttempt.attemptToken) {
+    //                 activeAttempt.attemptToken = generateAttemptToken();
+    //             }
+
+    //             // Rebuild selectedQuestions if missing
+    //             if (!activeAttempt.selectedQuestions || activeAttempt.selectedQuestions.length === 0) {
+    //                 const questionIds = activeAttempt.questionsServed.map(qs => qs.question);
+    //                 const questions = await Question.find({
+    //                     _id: { $in: questionIds }
+    //                 }).session(session);
+
+    //                 activeAttempt.selectedQuestions = activeAttempt.questionsServed.map(qs => {
+    //                     const question = questions.find(q => q._id.toString() === qs.question.toString());
+    //                     if (!question) return null;
+
+    //                     return {
+    //                         question: question._id,
+    //                         prompt: question.prompt,
+    //                         type: question.type,
+    //                         marks: question.marks,
+    //                         choices: quiz.shuffleChoices && question.choices
+    //                             ? shuffleArray(question.choices.map(c => ({ id: c.id, text: c.text })))
+    //                             : question.choices?.map(c => ({ id: c.id, text: c.text })) || []
+    //                     };
+    //                 }).filter(Boolean);
+
+    //                 await activeAttempt.save({ session });
+    //             }
+
+    //             // Update resume metadata
+    //             activeAttempt.resumeCount = (activeAttempt.resumeCount || 0) + 1;
+    //             activeAttempt.lastResumeTime = new Date();
+    //             activeAttempt.resumeIPs = activeAttempt.resumeIPs || [];
+    //             if (!activeAttempt.resumeIPs.includes(clientIP)) {
+    //                 activeAttempt.resumeIPs.push(clientIP);
+    //             }
+
+    //             await activeAttempt.save({ session });
+    //             await session.commitTransaction();
+
+    //             await activeAttempt.populate([
+    //                 { path: 'quiz', select: 'title durationMinutes totalMarks passingMarks antiCheatSettings' }
+    //             ]);
+
+    //             logger.info(`Resuming attempt: ${activeAttempt._id} for student ${studentId}`);
+
+    //             return res.json({
+    //                 success: true,
+    //                 resumed: true,
+    //                 message: "Resuming existing attempt",
+    //                 data: {
+    //                     ...activeAttempt.toObject(),
+    //                     timeRemaining: Math.max(0, Math.floor((durationMs - elapsed) / 1000)),
+    //                     serverTime: now
+    //                 }
+    //             });
+    //         }
+
+    //         // Create new attempt: Build question set
+    //         let selectedQuestions = [];
+
+    //         if (quiz.questionMode === "fixed_list") {
+    //             if (!quiz.questionIds || quiz.questionIds.length === 0) {
+    //                 await session.abortTransaction();
+    //                 return res.status(400).json({
+    //                     success: false,
+    //                     error: "Quiz has no questions configured"
+    //                 });
+    //             }
+
+    //             const questions = await Question.find({
+    //                 _id: { $in: quiz.questionIds },
+    //                 isActive: true
+    //             }).session(session);
+
+    //             if (questions.length === 0) {
+    //                 await session.abortTransaction();
+    //                 return res.status(400).json({
+    //                     success: false,
+    //                     error: "No active questions available"
+    //                 });
+    //             }
+
+    //             selectedQuestions = questions.map(q => ({
+    //                 question: q._id,
+    //                 prompt: q.prompt,
+    //                 type: q.type,
+    //                 marks: q.marks || 1,
+    //                 choices: quiz.shuffleChoices && q.choices
+    //                     ? shuffleArray(q.choices.map(c => ({ id: c.id, text: c.text })))
+    //                     : q.choices?.map(c => ({ id: c.id, text: c.text })) || []
+    //             }));
+    //         }
+    //         else if (quiz.questionMode === "pool_random") {
+    //             const qFilter = {
+    //                 subject: quiz.subject._id,
+    //                 isActive: true
+    //             };
+
+    //             if (quiz.questionPoolFilter?.difficulty?.length) {
+    //                 qFilter.difficulty = { $in: quiz.questionPoolFilter.difficulty };
+    //             }
+
+    //             if (quiz.questionPoolFilter?.tags?.length) {
+    //                 qFilter.tags = { $in: quiz.questionPoolFilter.tags };
+    //             }
+
+    //             const pool = await Question.find(qFilter).session(session);
+
+    //             if (pool.length === 0) {
+    //                 await session.abortTransaction();
+    //                 return res.status(400).json({
+    //                     success: false,
+    //                     error: "No questions available in the question pool"
+    //                 });
+    //             }
+
+    //             const count = Math.min(
+    //                 quiz.questionPoolFilter.count || 10,
+    //                 pool.length
+    //             );
+
+    //             selectedQuestions = shuffleArray(pool).slice(0, count).map(q => ({
+    //                 question: q._id,
+    //                 prompt: q.prompt,
+    //                 type: q.type,
+    //                 marks: q.marks || 1,
+    //                 choices: quiz.shuffleChoices && q.choices
+    //                     ? shuffleArray(q.choices.map(c => ({ id: c.id, text: c.text })))
+    //                     : q.choices?.map(c => ({ id: c.id, text: c.text })) || []
+    //             }));
+    //         }
+
+    //         // Shuffle question order if enabled
+    //         if (quiz.shuffleQuestions) {
+    //             selectedQuestions = shuffleArray(selectedQuestions);
+    //         }
+
+    //         // Calculate total marks
+    //         const attemptMaxScore = selectedQuestions.reduce(
+    //             (sum, q) => sum + (q.marks || 1), 0
+    //         );
+
+    //         // Create new attempt
+    //         const newAttempt = new QuizAttempt({
+    //             quiz: quizId,
+    //             user: studentId,
+    //             attemptNumber: completedAttempts + 1,
+    //             attemptToken: generateAttemptToken(),
+    //             status: "in_progress",
+    //             selectedQuestions,
+    //             startTime: new Date(),
+    //             totalScore: 0,
+    //             maxScore: attemptMaxScore,
+    //             tabSwitches: 0,
+    //             ipAtStart: clientIP,
+    //             userAgentStart: userAgent,
+    //             clientFingerprint: fingerprint,
+    //             questionsServed: selectedQuestions.map((q, idx) => ({
+    //                 question: q.question,
+    //                 orderIndex: idx,
+    //                 marks: q.marks
+    //             })),
+    //             browserInfo: {
+    //                 userAgent: userAgent,
+    //                 platform: req.headers['sec-ch-ua-platform'] || 'unknown'
+    //             },
+    //             resumeCount: 0,
+    //             resumeIPs: [clientIP]
+    //         });
+
+    //         await newAttempt.save({ session });
+    //         await session.commitTransaction();
+
+    //         await newAttempt.populate([
+    //             { path: 'quiz', select: 'title durationMinutes totalMarks passingMarks antiCheatSettings' }
+    //         ]);
+
+    //         logger.info(`Quiz started: ${quizId} by student ${studentId}, attempt ${newAttempt._id}`);
+
+    //         return res.json({
+    //             success: true,
+    //             message: "Quiz started successfully",
+    //             data: {
+    //                 ...newAttempt.toObject(),
+    //                 serverTime: now,
+    //                 timeRemaining: quiz.durationMinutes * 60
+    //             }
+    //         });
+
+    //     } catch (error) {
+    //         await session.abortTransaction();
+    //         logger.error("Start quiz error:", error);
+    //         next(error);
+    //     } finally {
+    //         session.endSession();
+    //     }
+    // }
+    // Utility function for shuffling
+    // shuffleArray(arr) {
+    //     return arr.sort(() => Math.random() - 0.5);
+    // }
     async startQuiz(req, res, next) {
         const session = await mongoose.startSession();
         session.startTransaction();
@@ -1470,26 +1969,38 @@ class QuizzesController {
                 });
             }
 
-            // Security: Time window validation
+            // ✅ FIXED: Optional time window validation
+            // Only enforce if BOTH startTime and endTime are set
             const now = new Date();
-            if (now < quiz.startTime) {
-                await session.abortTransaction();
-                return res.status(403).json({
-                    success: false,
-                    error: "Quiz has not started yet",
-                    availableFrom: quiz.startTime,
-                    serverTime: now
-                });
-            }
 
-            if (now > quiz.endTime) {
-                await session.abortTransaction();
-                return res.status(403).json({
-                    success: false,
-                    error: "Quiz has ended",
-                    endedAt: quiz.endTime,
-                    serverTime: now
-                });
+            if (quiz.startTime && quiz.endTime) {
+                const startTime = new Date(quiz.startTime);
+                const endTime = new Date(quiz.endTime);
+
+                // Check if quiz hasn't started yet
+                if (now < startTime) {
+                    await session.abortTransaction();
+                    return res.status(403).json({
+                        success: false,
+                        error: "Quiz has not started yet",
+                        availableFrom: quiz.startTime,
+                        serverTime: now
+                    });
+                }
+
+                // Check if quiz has ended
+                if (now > endTime) {
+                    await session.abortTransaction();
+                    return res.status(403).json({
+                        success: false,
+                        error: "Quiz has ended",
+                        endedAt: quiz.endTime,
+                        serverTime: now
+                    });
+                }
+            } else {
+                // ✅ NEW: If time window is not set, allow starting anytime
+                logger.info(`Quiz ${quizId} has no time restrictions - allowing student ${studentId} to start`);
             }
 
             // Security: Check attempt limits
@@ -1744,10 +2255,6 @@ class QuizzesController {
             session.endSession();
         }
     }
-    // Utility function for shuffling
-    // shuffleArray(arr) {
-    //     return arr.sort(() => Math.random() - 0.5);
-    // }
     async submitQuiz(req, res, next) {
         const session = await mongoose.startSession();
         session.startTransaction();
