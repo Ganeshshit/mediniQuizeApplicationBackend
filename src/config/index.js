@@ -21,7 +21,7 @@ const config = {
     // CORS
     corsOrigins: process.env.CORS_ORIGINS
         ? process.env.CORS_ORIGINS.split(',')
-        : ['http://localhost:3000', 'http://localhost:5173'],
+        : ['http://localhost:3000', 'http://localhost:5173', 'http://172.29.144.1:5173/','http://192.168.1.8:5173/'],
 
     // Email (example with SendGrid/Nodemailer)
     email: {

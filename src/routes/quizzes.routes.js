@@ -1,4 +1,4 @@
-// routes/quizzes.routes.js - FIXED VERSION
+// routes/quizzes.routes.js - FIXED VALIDATION
 const express = require('express');
 const quizzesController = require('../controllers/quizzes.controller');
 const authMiddleware = require('../middlewares/auth.middleware');
@@ -42,52 +42,69 @@ router.post('/',
     authorize('trainer', 'admin'),
     validateRequest({
         [Segments.BODY]: Joi.object({
+            // Required fields
             title: Joi.string().min(3).max(200).required(),
-            description: Joi.string().max(1000),
-            subject: validationSchemas.objectId.required(),
 
-            questionMode: Joi.string().valid('pool_random', 'fixed_list').required(),
-            questionIds: Joi.array().items(validationSchemas.objectId),
+            // Optional fields - FIXED: Allow empty strings or null
+            description: Joi.string().max(1000).allow('', null).optional(),
+            subject: Joi.alternatives().try(
+                validationSchemas.objectId,
+                Joi.string().allow('', null)
+            ).optional(),
 
+            questionMode: Joi.string().valid('pool_random', 'fixed_list', 'none').default('none'),
+            questionIds: Joi.array().items(validationSchemas.objectId).optional(),
+
+            // FIXED: Allow empty subject in questionPoolFilter
             questionPoolFilter: Joi.object({
-                subject: validationSchemas.objectId,
-                difficulty: Joi.array().items(Joi.string()),
-                tags: Joi.array().items(Joi.string()),
-                count: Joi.number().min(1)
-            }),
+                subject: Joi.alternatives().try(
+                    validationSchemas.objectId,
+                    Joi.string().allow('', null)
+                ).optional(),
+                difficulty: Joi.array().items(Joi.string()).optional(),
+                tags: Joi.array().items(Joi.string()).optional(),
+                count: Joi.number().min(1).optional()
+            }).optional(),
 
-            durationSeconds: Joi.number().min(60),
+            durationMinutes: Joi.number().min(1).optional(),
+            durationSeconds: Joi.number().min(60).optional(),
             attemptsAllowed: Joi.number().min(1).default(1),
 
-            startTime: Joi.date().required(),
-            endTime: Joi.date().required(),
+            startTime: Joi.date().optional(),
+            endTime: Joi.date().optional(),
 
             shuffleQuestions: Joi.boolean().default(true),
             shuffleChoices: Joi.boolean().default(true),
 
-            totalMarks: Joi.number().min(1),
-            passingMarks: Joi.number().min(0),
+            totalMarks: Joi.number().min(0).optional(),
+            passingMarks: Joi.number().min(0).optional(),
 
-            showResultsImmediately: Joi.boolean(),
-            showCorrectAnswers: Joi.boolean(),
+            showResultsImmediately: Joi.boolean().optional(),
+            showCorrectAnswers: Joi.boolean().optional(),
 
-            instructions: Joi.string(),
+            instructions: Joi.string().allow('', null).optional(),
 
             targetAudience: Joi.object({
-                semesters: Joi.array().items(Joi.number()),
-                departments: Joi.array().items(Joi.string()),
-                specificStudents: Joi.array().items(validationSchemas.objectId)
-            }),
+                semesters: Joi.array().items(Joi.number()).optional(),
+                departments: Joi.array().items(Joi.string()).optional(),
+                specificStudents: Joi.array().items(validationSchemas.objectId).optional()
+            }).optional(),
 
             antiCheatSettings: Joi.object({
-                enableTabSwitchDetection: Joi.boolean(),
-                maxTabSwitches: Joi.number(),
-                trackIPAddress: Joi.boolean(),
-                allowIPChange: Joi.boolean(),
-                enableFullScreen: Joi.boolean(),
-                disableCopyPaste: Joi.boolean(),
-                randomizeQuestionOrder: Joi.boolean()
-            })
+                enableTabSwitchDetection: Joi.boolean().optional(),
+                maxTabSwitches: Joi.number().optional(),
+                trackIPAddress: Joi.boolean().optional(),
+                allowIPChange: Joi.boolean().optional(),
+                enableFullScreen: Joi.boolean().optional(),
+                disableCopyPaste: Joi.boolean().optional(),
+                randomizeQuestionOrder: Joi.boolean().optional()
+            }).optional(),
+
+            // FIXED: Additional fields allow empty strings
+            status: Joi.string().valid('draft', 'ready', 'published').optional(),
+            isDraft: Joi.boolean().default(true),
+            tags: Joi.array().items(Joi.string()).optional(),
+            category: Joi.string().allow('', null).optional()
         })
     }),
     quizzesController.createQuiz
@@ -100,6 +117,53 @@ router.put('/:id',
     validateRequest({
         [Segments.PARAMS]: Joi.object({
             id: validationSchemas.objectId.required()
+        }),
+        [Segments.BODY]: Joi.object({
+            title: Joi.string().min(3).max(200).optional(),
+            description: Joi.string().max(1000).allow('', null).optional(),
+            subject: Joi.alternatives().try(
+                validationSchemas.objectId,
+                Joi.string().allow('', null)
+            ).optional(),
+            questionMode: Joi.string().valid('pool_random', 'fixed_list', 'none').optional(),
+            questionIds: Joi.array().items(validationSchemas.objectId).optional(),
+            questionPoolFilter: Joi.object({
+                subject: Joi.alternatives().try(
+                    validationSchemas.objectId,
+                    Joi.string().allow('', null)
+                ).optional(),
+                difficulty: Joi.array().items(Joi.string()).optional(),
+                tags: Joi.array().items(Joi.string()).optional(),
+                count: Joi.number().min(1).optional()
+            }).optional(),
+            durationMinutes: Joi.number().min(1).optional(),
+            totalMarks: Joi.number().min(0).optional(),
+            passingMarks: Joi.number().min(0).optional(),
+            attemptsAllowed: Joi.number().min(1).optional(),
+            startTime: Joi.date().optional(),
+            endTime: Joi.date().optional(),
+            shuffleQuestions: Joi.boolean().optional(),
+            shuffleChoices: Joi.boolean().optional(),
+            showResultsImmediately: Joi.boolean().optional(),
+            showCorrectAnswers: Joi.boolean().optional(),
+            instructions: Joi.string().allow('', null).optional(),
+            targetAudience: Joi.object({
+                semesters: Joi.array().items(Joi.number()).optional(),
+                departments: Joi.array().items(Joi.string()).optional(),
+                specificStudents: Joi.array().items(validationSchemas.objectId).optional()
+            }).optional(),
+            antiCheatSettings: Joi.object({
+                enableTabSwitchDetection: Joi.boolean().optional(),
+                maxTabSwitches: Joi.number().optional(),
+                trackIPAddress: Joi.boolean().optional(),
+                allowIPChange: Joi.boolean().optional(),
+                enableFullScreen: Joi.boolean().optional(),
+                disableCopyPaste: Joi.boolean().optional(),
+                randomizeQuestionOrder: Joi.boolean().optional()
+            }).optional(),
+            status: Joi.string().valid('draft', 'ready', 'published', 'archived').optional(),
+            tags: Joi.array().items(Joi.string()).optional(),
+            category: Joi.string().allow('', null).optional()
         })
     }),
     quizzesController.updateQuiz
@@ -221,7 +285,6 @@ router.post('/:id/start',
     quizzesController.startQuiz
 );
 
-// ✅ FIXED: Submit Quiz - Added clientFingerprint validation
 // Submit quiz (Student only)
 router.post('/:attemptId/submit',
     authMiddleware,
@@ -262,7 +325,6 @@ router.get('/:id/my-attempts',
     quizzesController.getMyAttemptsForQuiz
 );
 
-// Get a single attempt detail (student)
 // Get single attempt detail (Student only - own attempts)
 router.get('/attempts/:attemptId',
     authMiddleware,
@@ -275,7 +337,7 @@ router.get('/attempts/:attemptId',
     quizzesController.getMyAttemptDetail
 );
 
-// ✅ FIXED: Auto-save - Added clientTimestamp validation
+// Auto-save
 router.post('/:attemptId/auto-save',
     authMiddleware,
     authorize('student'),
@@ -336,12 +398,11 @@ router.get('/:id/attempts',
                 'manually_graded', 'flagged', 'timeout', 'abandoned'
             ).optional(),
             studentId: validationSchemas.objectId.optional(),
-            search: Joi.string().allow('').optional()   // FIX 2 (explained below)
+            search: Joi.string().allow('').optional()
         })
     }),
     (req, res, next) => quizzesController.getQuizAttempts(req, res, next)
 );
-// Get detailed attempt (Trainer/Admin - with ownership check)
 // Get detailed attempt (Trainer/Admin - with ownership check)
 router.get('/:id/attempts/:attemptId/details',
     authMiddleware,

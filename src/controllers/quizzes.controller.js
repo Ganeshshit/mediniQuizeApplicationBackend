@@ -387,49 +387,88 @@ class QuizzesController {
         try {
             const {
                 title,
-                description,
+                description = '',
                 subject,
-                questionMode,
-                questionIds,
+                questionMode = 'none',
+                questionIds = [],
                 questionPoolFilter,
-                durationMinutes = req.body.durationSeconds
-                    ? Math.ceil(req.body.durationSeconds / 60)
-                    : req.body.durationMinutes || 60,
+                durationMinutes,
+                durationSeconds,
                 totalMarks,
                 passingMarks,
-                attemptsAllowed,
+                attemptsAllowed = 1,
                 startTime,
                 endTime,
-                shuffleQuestions,
-                shuffleChoices,
-                showResultsImmediately,
-                showCorrectAnswers,
+                shuffleQuestions = true,
+                shuffleChoices = true,
+                showResultsImmediately = false,
+                showCorrectAnswers = false,
                 targetAudience,
-                antiCheatSettings,
-                instructions
+                antiCheatSettings = {},
+                instructions = '',
+                status = 'draft',
+                isDraft = true,
+                tags = [],
+                category
             } = req.body;
 
-            // Validate subject exists
-            const subjectExists = await Subject.findById(subject).session(session);
-            if (!subjectExists) {
-                await session.abortTransaction();
-                return res.status(400).json({
-                    success: false,
-                    error: 'Invalid subject'
-                });
+            // Calculate duration
+            const quizDuration = durationMinutes || (durationSeconds ? Math.ceil(durationSeconds / 60) : 60);
+
+            // ✅ FIXED: Clean up empty string values
+            const cleanSubject = subject && subject.trim() !== '' ? subject : undefined;
+            const cleanCategory = category && category.trim() !== '' ? category : undefined;
+
+            // ✅ FIXED: Clean up questionPoolFilter
+            let cleanQuestionPoolFilter = undefined;
+            if (questionMode === 'pool_random' && questionPoolFilter) {
+                const poolSubject = questionPoolFilter.subject &&
+                    questionPoolFilter.subject.trim() !== ''
+                    ? questionPoolFilter.subject
+                    : undefined;
+
+                cleanQuestionPoolFilter = {
+                    subject: poolSubject,
+                    difficulty: questionPoolFilter.difficulty || [],
+                    tags: questionPoolFilter.tags || [],
+                    count: questionPoolFilter.count || 10
+                };
+
+                // Remove undefined subject if not provided
+                if (!poolSubject) {
+                    delete cleanQuestionPoolFilter.subject;
+                }
             }
 
-            // Validate question mode
-            if (questionMode === 'fixed_list') {
-                if (!questionIds || questionIds.length === 0) {
+            // ✅ VALIDATE: subject only if provided and not empty
+            if (cleanSubject) {
+                const subjectExists = await Subject.findById(cleanSubject).session(session);
+                if (!subjectExists) {
                     await session.abortTransaction();
                     return res.status(400).json({
                         success: false,
-                        error: 'Question IDs required for fixed_list mode'
+                        error: 'Invalid subject ID'
                     });
                 }
+            }
 
-                // Validate all questions exist
+            // ✅ VALIDATE: questionPoolFilter.subject only if provided
+            if (cleanQuestionPoolFilter?.subject) {
+                const poolSubjectExists = await Subject.findById(cleanQuestionPoolFilter.subject).session(session);
+                if (!poolSubjectExists) {
+                    await session.abortTransaction();
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Invalid subject ID in question pool filter'
+                    });
+                }
+            }
+
+            // Handle question validation based on mode
+            let calculatedTotalMarks = totalMarks || 0;
+
+            if (questionMode === 'fixed_list' && questionIds.length > 0) {
+                // Validate questions if provided
                 const questions = await Question.find({
                     _id: { $in: questionIds }
                 }).session(session);
@@ -442,36 +481,34 @@ class QuizzesController {
                     });
                 }
 
-                // Calculate total marks if not provided
-                const calculatedTotalMarks = questions.reduce(
-                    (sum, q) => sum + (q.marks || 1),
-                    0
-                );
-
+                // Auto-calculate marks if not provided
                 if (!totalMarks) {
-                    req.body.totalMarks = calculatedTotalMarks;
+                    calculatedTotalMarks = questions.reduce(
+                        (sum, q) => sum + (q.marks || 1),
+                        0
+                    );
                 }
-            } else if (questionMode === 'pool_random') {
-                if (!questionPoolFilter || !questionPoolFilter.count) {
+            } else if (questionMode === 'pool_random' && cleanQuestionPoolFilter) {
+                // Auto-calculate marks for pool mode
+                if (!totalMarks) {
+                    calculatedTotalMarks = (cleanQuestionPoolFilter.count || 10) * 1;
+                }
+            }
+
+            // Validate time window only if both are provided
+            if (startTime && endTime) {
+                if (new Date(startTime) >= new Date(endTime)) {
                     await session.abortTransaction();
                     return res.status(400).json({
                         success: false,
-                        error: 'Question pool filter and count required for pool_random mode'
+                        error: 'Start time must be before end time'
                     });
                 }
             }
 
-            // Validate time window
-            if (new Date(startTime) >= new Date(endTime)) {
-                await session.abortTransaction();
-                return res.status(400).json({
-                    success: false,
-                    error: 'Start time must be before end time'
-                });
-            }
-
             // Validate passing marks
-            if (passingMarks && totalMarks && passingMarks > totalMarks) {
+            const finalPassingMarks = passingMarks || 0;
+            if (calculatedTotalMarks > 0 && finalPassingMarks > calculatedTotalMarks) {
                 await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
@@ -479,42 +516,52 @@ class QuizzesController {
                 });
             }
 
+            // Create quiz with cleaned fields
             const quiz = new Quiz({
                 title,
                 description,
-                subject,
+                subject: cleanSubject,
                 questionMode,
                 questionIds: questionMode === 'fixed_list' ? questionIds : [],
-                questionPoolFilter: questionMode === 'pool_random' ? questionPoolFilter : undefined,
-                durationMinutes: durationMinutes || 60,
-                totalMarks: req.body.totalMarks || totalMarks,
-                passingMarks: passingMarks || 0,
-                attemptsAllowed: attemptsAllowed || 1,
-                startTime,
-                endTime,
-                shuffleQuestions: shuffleQuestions !== undefined ? shuffleQuestions : true,
-                shuffleChoices: shuffleChoices !== undefined ? shuffleChoices : true,
-                showResultsImmediately: showResultsImmediately || false,
-                showCorrectAnswers: showCorrectAnswers || false,
+                questionPoolFilter: cleanQuestionPoolFilter,
+                durationMinutes: quizDuration,
+                totalMarks: calculatedTotalMarks,
+                passingMarks: finalPassingMarks,
+                attemptsAllowed,
+                startTime: startTime || undefined,
+                endTime: endTime || undefined,
+                shuffleQuestions,
+                shuffleChoices,
+                showResultsImmediately,
+                showCorrectAnswers,
                 targetAudience,
-                antiCheatSettings: antiCheatSettings || {},
+                antiCheatSettings,
                 instructions,
                 createdBy: req.user._id,
-                isPublished: false // Default unpublished
+                status,
+                isDraft,
+                isPublished: false,
+                tags,
+                category: cleanCategory,
+                lastAutoSave: new Date()
             });
 
             await quiz.save({ session });
             await session.commitTransaction();
 
-            await quiz.populate('subject', 'name');
+            // Populate relations if they exist
+            if (cleanSubject) {
+                await quiz.populate('subject', 'name code');
+            }
             await quiz.populate('createdBy', 'name email');
 
-            logger.info(`Quiz created: ${quiz._id} by ${req.user.email}`);
+            logger.info(`Quiz created: ${quiz._id} by ${req.user.email} (status: ${status})`);
 
             res.status(201).json({
                 success: true,
                 data: quiz,
-                message: 'Quiz created successfully'
+                message: isDraft ? 'Draft quiz created successfully' : 'Quiz created successfully',
+                completionPercentage: quiz.getCompletionPercentage()
             });
         } catch (error) {
             await session.abortTransaction();
@@ -524,7 +571,6 @@ class QuizzesController {
             session.endSession();
         }
     }
-
     /**
      * PUT /api/quizzes/:id
      * Update quiz (trainer/admin only)
@@ -547,19 +593,32 @@ class QuizzesController {
                 });
             }
 
-            // Check if quiz has attempts (restrict editing published quizzes with attempts)
+            // ✅ PERMISSION: Check ownership for trainers
+            if (req.user.role === 'trainer' && quiz.createdBy.toString() !== req.user._id.toString()) {
+                await session.abortTransaction();
+                return res.status(403).json({
+                    success: false,
+                    error: 'You can only update your own quizzes'
+                });
+            }
+
+            // ✅ SMART VALIDATION: Check if quiz has attempts
             const attemptCount = await QuizAttempt.countDocuments({
                 quiz: quiz._id
             }).session(session);
 
-            if (attemptCount > 0 && quiz.isPublished) {
-                // Only allow limited updates for published quizzes with attempts
+            const hasAttempts = attemptCount > 0;
+
+            if (hasAttempts && quiz.isPublished) {
+                // Restrict updates if quiz is published and has attempts
                 const allowedUpdates = [
                     'description',
                     'instructions',
                     'endTime',
                     'showResultsImmediately',
-                    'showCorrectAnswers'
+                    'showCorrectAnswers',
+                    'tags',
+                    'category'
                 ];
 
                 const attemptedUpdates = Object.keys(updates);
@@ -573,7 +632,8 @@ class QuizzesController {
                         success: false,
                         error: 'Cannot modify core quiz settings after students have attempted',
                         restrictedFields: restrictedUpdates,
-                        allowedFields: allowedUpdates
+                        allowedFields: allowedUpdates,
+                        hint: 'Consider duplicating the quiz to make major changes'
                     });
                 }
             }
@@ -591,7 +651,7 @@ class QuizzesController {
             }
 
             // Validate questions if being updated
-            if (updates.questionIds) {
+            if (updates.questionIds && updates.questionIds.length > 0) {
                 const questions = await Question.find({
                     _id: { $in: updates.questionIds }
                 }).session(session);
@@ -603,13 +663,21 @@ class QuizzesController {
                         error: 'Some question IDs are invalid'
                     });
                 }
+
+                // Auto-update total marks
+                if (!updates.totalMarks) {
+                    updates.totalMarks = questions.reduce(
+                        (sum, q) => sum + (q.marks || 1),
+                        0
+                    );
+                }
             }
 
             // Validate time window if being updated
             const newStartTime = updates.startTime || quiz.startTime;
             const newEndTime = updates.endTime || quiz.endTime;
 
-            if (new Date(newStartTime) >= new Date(newEndTime)) {
+            if (newStartTime && newEndTime && new Date(newStartTime) >= new Date(newEndTime)) {
                 await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
@@ -617,14 +685,26 @@ class QuizzesController {
                 });
             }
 
+            // ✅ VERSION CONTROL: Save previous version
+            if (!quiz.isDraft && hasAttempts) {
+                quiz.previousVersions.push({
+                    version: quiz.version,
+                    snapshot: quiz.toObject(),
+                    modifiedBy: req.user._id,
+                    modifiedAt: new Date()
+                });
+                quiz.version += 1;
+            }
+
             // Apply updates
             Object.assign(quiz, updates);
             quiz.modifiedBy = req.user._id;
+            quiz.lastAutoSave = new Date();
 
             await quiz.save({ session });
             await session.commitTransaction();
 
-            await quiz.populate('subject', 'name');
+            await quiz.populate('subject', 'name code');
             await quiz.populate('createdBy', 'name email');
             await quiz.populate('modifiedBy', 'name email');
 
@@ -633,7 +713,9 @@ class QuizzesController {
             res.json({
                 success: true,
                 data: quiz,
-                message: 'Quiz updated successfully'
+                message: 'Quiz updated successfully',
+                completionPercentage: quiz.getCompletionPercentage(),
+                version: quiz.version
             });
         } catch (error) {
             await session.abortTransaction();
@@ -643,6 +725,7 @@ class QuizzesController {
             session.endSession();
         }
     }
+
 
     /**
      * PATCH /api/quizzes/:id/publish
@@ -662,30 +745,31 @@ class QuizzesController {
                 });
             }
 
-            // Validate quiz is ready for publishing
+            // Check ownership for trainers
+            if (req.user.role === 'trainer' && quiz.createdBy.toString() !== req.user._id.toString()) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'You can only publish your own quizzes'
+                });
+            }
+
+            // ✅ VALIDATE before publishing
             if (isPublished) {
-                // Check if quiz has questions
-                if (quiz.questionMode === 'fixed_list' && (!quiz.questionIds || quiz.questionIds.length === 0)) {
+                const validation = quiz.isReadyToPublish();
+
+                if (!validation.ready) {
                     return res.status(400).json({
                         success: false,
-                        error: 'Cannot publish quiz without questions'
+                        error: 'Quiz is not ready to publish',
+                        errors: validation.errors,
+                        completionPercentage: quiz.getCompletionPercentage()
                     });
                 }
 
-                if (quiz.questionMode === 'pool_random' && !quiz.questionPoolFilter) {
-                    return res.status(400).json({
-                        success: false,
-                        error: 'Cannot publish quiz without question pool filter'
-                    });
-                }
-
-                // Validate required fields
-                if (!quiz.durationMinutes || !quiz.startTime || !quiz.endTime) {
-                    return res.status(400).json({
-                        success: false,
-                        error: 'Duration, start time, and end time are required'
-                    });
-                }
+                quiz.status = 'published';
+                quiz.isDraft = false;
+            } else {
+                quiz.status = 'draft';
             }
 
             quiz.isPublished = isPublished;
