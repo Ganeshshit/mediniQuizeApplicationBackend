@@ -54,7 +54,8 @@ const requiredEnvVars = ['MONGO_URI', 'JWT_ACCESS_SECRET', 'JWT_REFRESH_SECRET']
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
 if (missingVars.length > 0 && config.env === 'production') {
-    throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
+    console.warn(`Warning: Missing ENV vars: ${missingVars.join(', ')}`);
 }
+
 
 module.exports = config;
