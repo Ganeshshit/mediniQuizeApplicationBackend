@@ -6,6 +6,7 @@ const subjectsRoutes = require('./subjects.routes');
 const questionsRoutes = require('./questions.routes');
 const quizzesRoutes = require('./quizzes.routes');
 const attemptsRoutes = require('./attempts.routes');
+const quizEnrollmentRoutes = require('./quizeenrollment.route');
 
 const router = express.Router();
 
@@ -15,6 +16,8 @@ router.use('/subjects', subjectsRoutes);
 router.use('/questions', questionsRoutes);
 router.use('/quizzes', quizzesRoutes);
 router.use('/attempts', attemptsRoutes);
+router.use('/enrollments', quizEnrollmentRoutes);
+
 
 // Health check
 router.get('/health', (req, res) => {
