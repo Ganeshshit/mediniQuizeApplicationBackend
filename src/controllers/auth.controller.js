@@ -181,21 +181,9 @@ exports.register = async (req, res) => {
             name,
             email,
             password,
-            department,
-
-            // Optional fields
-            rollNo,
-            registrationNo,
-            semester,
-            batch,
-            softwareSkills,
-            programmingLanguages,
-            phone,
-            gender,
-            dateOfBirth,
-            address,
-            cgpa,
-            previousEducation
+            phoneNo,
+            usn,
+            collegeName
         } = req.body;
 
         // Required minimal fields
@@ -203,7 +191,9 @@ exports.register = async (req, res) => {
         if (!name) missing.push("name");
         if (!email) missing.push("email");
         if (!password) missing.push("password");
-        if (!department) missing.push("department");
+        if (!phoneNo) missing.push("phoneNo");
+        if (!usn) missing.push("usn");
+        if (!collegeName) missing.push("collegeName");
 
         if (missing.length > 0) {
             return res.status(400).json({
@@ -240,22 +230,9 @@ exports.register = async (req, res) => {
             email,
             passwordHash,
             role: "student",
-            department,
-
-            // Optional fields (only saved if sent)
-            rollNo,
-            registrationNo,
-            semester,
-            batch,
-            softwareSkills,
-            programmingLanguages,
-            phone,
-            gender,
-            dateOfBirth,
-            address,
-            cgpa,
-            previousEducation,
-
+            phoneNo,
+            usn,
+            collegeName,
             isVerified: false,
             verificationToken,
             verificationTokenExpiry
@@ -283,7 +260,9 @@ exports.register = async (req, res) => {
                 _id: user._id,
                 name: user.name,
                 email: user.email,
-                department: user.department,
+                phoneNo: user.phoneNo,
+                usn: user.usn,
+                collegeName: user.collegeName,
                 role: user.role,
                 isVerified: user.isVerified
             },

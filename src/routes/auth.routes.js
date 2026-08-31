@@ -75,49 +75,9 @@ router.post(
             name: Joi.string().min(2).max(100).required(),
             email: validationSchemas.email.required(),
             password: validationSchemas.password.required(),
-            department: Joi.string().required(),
-
-            // Everything below is optional
-            rollNo: Joi.string().optional(),
-            registrationNo: Joi.string().optional(),
-            semester: Joi.number().optional(),
-            batch: Joi.string().optional(),
-            softwareSkills: Joi.array().items(
-                Joi.object({
-                    name: Joi.string().required(),
-                    proficiency: Joi.string().valid("beginner", "intermediate", "advanced", "expert")
-                })
-            ).optional(),
-            programmingLanguages: Joi.array().items(
-                Joi.object({
-                    language: Joi.string().required(),
-                    experience: Joi.string().valid(
-                        "< 6 months",
-                        "6-12 months",
-                        "1-2 years",
-                        "2+ years"
-                    )
-                })
-            ).optional(),
-            phone: Joi.string().optional(),
-            gender: Joi.string().valid("male", "female", "other", "prefer_not_to_say").optional(),
-            dateOfBirth: Joi.date().optional(),
-            address: Joi.object({
-                street: Joi.string().optional(),
-                city: Joi.string().optional(),
-                state: Joi.string().optional(),
-                zipCode: Joi.string().optional(),
-                country: Joi.string().optional()
-            }).optional(),
-            cgpa: Joi.number().optional(),
-            previousEducation: Joi.array().items(
-                Joi.object({
-                    degree: Joi.string().optional(),
-                    institution: Joi.string().optional(),
-                    year: Joi.number().optional(),
-                    percentage: Joi.number().optional()
-                })
-            ).optional()
+            phoneNo: Joi.string().pattern(/^[0-9]{10}$/).required(),
+            usn: Joi.string().required(),
+            collegeName: Joi.string().required()
         }).unknown(true)
     }),
     authController.register
@@ -170,3 +130,6 @@ router.post('/reset-password',
 );
 
 module.exports = router;
+
+
+
