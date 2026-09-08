@@ -4,10 +4,13 @@ const Quiz = require('../models/Quiz');
 const Question = require('../models/Question');
 const QuizAttempt = require('../models/QuizAttempt');
 const AuditLog = require('../models/AuditLog');
+const AuditEvent = require('../models/auditEvent.model');
 const mongoose = require('mongoose');
 const logger = require('../config/logger');
 const config = require('../config');
 const gradingService = require('../services/grading.service');
+const auditService = require('../services/audit.service');
+const monitoringService = require('../services/monitoring.service');
 
 class AttemptsController {
     /**
@@ -138,17 +141,29 @@ class AttemptsController {
             const maxScore = questions.reduce((sum, q) => sum + (q.marks || 1), 0);
 
             // Create attempt
+            const crypto = require('crypto');
+            const sessionId = crypto.randomUUID();
+            const attemptToken = crypto.randomUUID();
+
             const attempt = new QuizAttempt({
                 quiz: quizId,
                 user: userId,
                 startTime: now,
                 status: 'in_progress',
                 rawAnswers: [],
+                attemptNumber: attemptCount + 1,
                 attemptIndex: attemptCount + 1,
+                attemptToken,
                 maxScore,
                 ipAtStart: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress,
                 userAgentStart: req.headers['user-agent'],
-                tabSwitches: 0
+                tabSwitches: 0,
+                sessionId,
+                expiresAt: new Date(now.getTime() + quiz.durationMinutes * 60 * 1000),
+                riskScore: 0,
+                violationCount: 0,
+                suspicious: false,
+                riskLevel: 'low'
             });
 
             await attempt.save({ session });
@@ -185,6 +200,8 @@ class AttemptsController {
                 success: true,
                 data: {
                     attemptId: attempt._id,
+                    sessionId: attempt.sessionId,
+                    attemptToken: attempt.attemptToken,
                     quiz: {
                         id: quiz._id,
                         title: quiz.title,
@@ -196,6 +213,7 @@ class AttemptsController {
                     },
                     questions: clientQuestions,
                     startTime: attempt.startTime,
+                    expiresAt: attempt.expiresAt,
                     serverTime: now,
                     maxScore: attempt.maxScore
                 }
@@ -211,12 +229,12 @@ class AttemptsController {
 
     /**
      * POST /api/quizzes/:quizId/save
-     * Save answers incrementally (autosave)
+     * Save answers incrementally (autosave) with IP tracking
      */
     async saveAnswers(req, res, next) {
         try {
             const { quizId } = req.params;
-            const { attemptId, answers } = req.body;
+            const { attemptId, answers, sessionId } = req.body;
             const userId = req.user._id;
 
             // Fetch attempt
@@ -234,15 +252,32 @@ class AttemptsController {
                 });
             }
 
+            // Validate session ID
+            if (sessionId && sessionId !== attempt.sessionId) {
+                await auditService.createAuditEvent({
+                    attempt,
+                    eventType: 'multiple_session',
+                    meta: {
+                        expectedSession: attempt.sessionId,
+                        providedSession: sessionId
+                    },
+                    req
+                });
+
+                return res.status(403).json({
+                    success: false,
+                    error: 'Invalid session detected'
+                });
+            }
+
             // Check if attempt has expired
             const quiz = await Quiz.findById(quizId);
-            const timeLimit = quiz.durationMinutes * 60 * 1000; // Convert to ms
-            const elapsed = new Date() - attempt.startTime;
 
-            if (elapsed > timeLimit) {
+            // Use expiresAt for server-side validation
+            if (attempt.expiresAt && new Date() > attempt.expiresAt) {
                 // Auto-submit if time expired
                 attempt.status = 'submitted';
-                attempt.endTime = new Date(attempt.startTime.getTime() + timeLimit);
+                attempt.endTime = attempt.expiresAt;
                 await attempt.save();
 
                 return res.status(400).json({
@@ -250,6 +285,12 @@ class AttemptsController {
                     error: 'Time limit exceeded. Attempt auto-submitted.',
                     attemptId: attempt._id
                 });
+            }
+
+            // IP tracking if enabled
+            const currentIp = auditService.getClientIp(req);
+            if (quiz.antiCheatSettings?.trackIPAddress) {
+                await auditService.detectIpChange(attemptId, currentIp, req);
             }
 
             // Merge/update answers
@@ -292,7 +333,7 @@ class AttemptsController {
 
     /**
      * POST /api/quizzes/:quizId/submit
-     * Submit attempt for grading
+     * Submit attempt for grading with server-side validation
      */
     async submitAttempt(req, res, next) {
         const session = await mongoose.startSession();
@@ -300,7 +341,7 @@ class AttemptsController {
 
         try {
             const { quizId } = req.params;
-            const { attemptId } = req.body;
+            const { attemptId, sessionId } = req.body;
             const userId = req.user._id;
 
             // Fetch attempt
@@ -327,35 +368,114 @@ class AttemptsController {
                 });
             }
 
+            // Validate session ID
+            if (sessionId && sessionId !== attempt.sessionId) {
+                await auditService.createAuditEvent({
+                    attempt,
+                    eventType: 'multiple_session',
+                    meta: {
+                        expectedSession: attempt.sessionId,
+                        providedSession: sessionId
+                    },
+                    req
+                });
+
+                await session.abortTransaction();
+                return res.status(403).json({
+                    success: false,
+                    error: 'Invalid session detected'
+                });
+            }
+
             const quiz = await Quiz.findById(quizId).session(session);
             const now = new Date();
 
-            // Set end time
-            attempt.endTime = now;
-            attempt.status = 'submitted';
+            // Server-side time validation
+            if (attempt.expiresAt && now > attempt.expiresAt) {
+                // Auto-submit due to timeout
+                attempt.endTime = attempt.expiresAt;
+                attempt.status = 'timeout';
+
+                // Log auto-submit event
+                await auditService.createAuditEvent({
+                    attempt,
+                    eventType: 'quiz_auto_submitted',
+                    meta: {
+                        reason: 'time_limit_exceeded',
+                        expiresAt: attempt.expiresAt,
+                        submittedAt: now
+                    },
+                    req
+                });
+            } else {
+                // Normal submission
+                attempt.endTime = now;
+                attempt.status = 'submitted';
+
+                // Log submission event
+                await auditService.createAuditEvent({
+                    attempt,
+                    eventType: 'quiz_submitted',
+                    req
+                });
+            }
+
             attempt.ipAtEnd = req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress;
             attempt.userAgentEnd = req.headers['user-agent'];
 
-            // Check for suspicious activity
+            // Server-side violation counting from AuditEvent
+            const tabSwitchCount = await AuditEvent.countDocuments({
+                attemptId: attempt._id,
+                eventType: 'tab_switch'
+            });
+
+            const fullscreenExitCount = await AuditEvent.countDocuments({
+                attemptId: attempt._id,
+                eventType: 'fullscreen_exit'
+            });
+
+            const copyCount = await AuditEvent.countDocuments({
+                attemptId: attempt._id,
+                eventType: 'copy'
+            });
+
+            const pasteCount = await AuditEvent.countDocuments({
+                attemptId: attempt._id,
+                eventType: 'paste'
+            });
+
+            // Update attempt with server-side counts
+            attempt.tabSwitches = tabSwitchCount;
+            attempt.fullScreenExits = fullscreenExitCount;
+            attempt.copyPasteEvents = copyCount + pasteCount;
+
+            // Check for suspicious activity based on server-side data
             const flaggedReasons = [];
 
-            // Check tab switches
-            if (attempt.tabSwitches > config.antiCheat.maxTabSwitches) {
-                flaggedReasons.push(`Excessive tab switches: ${attempt.tabSwitches}`);
+            // Check tab switches using server-side count
+            if (tabSwitchCount > (quiz.antiCheatSettings?.maxTabSwitches || 10)) {
+                flaggedReasons.push(`Excessive tab switches: ${tabSwitchCount}`);
             }
 
-            // Check IP change
-            if (attempt.ipAtStart !== attempt.ipAtEnd && !config.antiCheat.allowIPChange) {
+            // Check IP change if tracking is enabled
+            if (quiz.antiCheatSettings?.trackIPAddress &&
+                !quiz.antiCheatSettings?.allowIPChange &&
+                attempt.ipAtStart !== attempt.ipAtEnd) {
                 flaggedReasons.push('IP address changed during attempt');
             }
 
-            // Check time anomalies
+            // Check time anomalies using server-side calculation
             const expectedMinTime = quiz.durationMinutes * 60 * 1000;
             const actualTime = attempt.endTime - attempt.startTime;
 
             if (actualTime < (expectedMinTime * 0.1)) {
                 // Submitted too quickly (less than 10% of allowed time)
                 flaggedReasons.push('Submitted suspiciously fast');
+            }
+
+            // Check risk score
+            if (attempt.riskScore >= 15) {
+                flaggedReasons.push(`High risk score: ${attempt.riskScore} (${attempt.riskLevel})`);
             }
 
             if (flaggedReasons.length > 0) {
@@ -407,7 +527,9 @@ class AttemptsController {
                     attemptId: attempt._id,
                     status: attempt.status,
                     endTime: attempt.endTime,
-                    flaggedReasons: attempt.flaggedReasons
+                    flaggedReasons: attempt.flaggedReasons,
+                    riskScore: attempt.riskScore,
+                    riskLevel: attempt.riskLevel
                 }
             };
 
@@ -821,14 +943,14 @@ class AttemptsController {
 
     /**
      * POST /api/audit/event
-     * Log anti-cheat audit events
+     * Log anti-cheat audit events with risk scoring and IP tracking
      */
     async logAuditEvent(req, res, next) {
         try {
-            const { attemptId, eventType, meta } = req.body;
+            const { attemptId, eventType, meta, clientTimestamp } = req.body;
             const userId = req.user._id;
 
-            // Verify attempt belongs to user
+            // Verify attempt belongs to user and is active
             const attempt = await QuizAttempt.findOne({
                 _id: attemptId,
                 user: userId,
@@ -842,33 +964,62 @@ class AttemptsController {
                 });
             }
 
-            // Create audit log
-            const auditLog = new AuditLog({
-                attemptId,
-                userId,
+            // Check if attempt has expired
+            if (attempt.expiresAt && new Date() > attempt.expiresAt) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Attempt has expired'
+                });
+            }
+
+            // Validate session ID if provided
+            const sessionId = req.headers['x-quiz-session'];
+            if (sessionId && sessionId !== attempt.sessionId) {
+                // Multiple session detected
+                await auditService.createAuditEvent({
+                    attempt,
+                    eventType: 'multiple_session',
+                    meta: {
+                        expectedSession: attempt.sessionId,
+                        providedSession: sessionId
+                    },
+                    req
+                });
+
+                return res.status(403).json({
+                    success: false,
+                    error: 'Invalid session detected'
+                });
+            }
+
+            // IP tracking if enabled
+            const quiz = await Quiz.findById(attempt.quiz);
+            const currentIp = auditService.getClientIp(req);
+            if (quiz?.antiCheatSettings?.trackIPAddress) {
+                await auditService.detectIpChange(attemptId, currentIp, req);
+            }
+
+            // Create audit event using the new service
+            const event = await auditService.createAuditEvent({
+                attempt,
                 eventType,
                 meta,
-                timestamp: new Date()
+                clientTimestamp,
+                req
             });
 
-            await auditLog.save();
-
-            // Update attempt counters for specific events
+            // Update legacy attempt counters for backward compatibility
             if (eventType === 'tab_switch') {
                 attempt.tabSwitches += 1;
-
-                // Check threshold and flag if exceeded
-                if (attempt.tabSwitches >= config.antiCheat.tabSwitchWarning) {
-                    logger.warn(`High tab switches detected: ${attempt.tabSwitches} for attempt ${attemptId}`);
-                }
-
                 await attempt.save();
             }
 
             res.json({
                 success: true,
                 message: 'Event logged',
-                tabSwitches: attempt.tabSwitches
+                eventId: event._id,
+                riskScore: attempt.riskScore,
+                riskLevel: attempt.riskLevel
             });
         } catch (error) {
             logger.error('Log audit event error:', error);
@@ -893,30 +1044,96 @@ class AttemptsController {
                 });
             }
 
-            const auditLogs = await AuditLog.find({
-                attemptId
-            }).sort({ timestamp: 1 });
-
-            // Group events by type for summary
-            const summary = auditLogs.reduce((acc, log) => {
-                if (!acc[log.eventType]) {
-                    acc[log.eventType] = 0;
-                }
-                acc[log.eventType] += 1;
-                return acc;
-            }, {});
+            // Use the new audit service to get events
+            const auditData = await auditService.getAuditEvents(attemptId);
 
             res.json({
                 success: true,
                 data: {
                     attemptId,
-                    summary,
-                    events: auditLogs,
-                    totalEvents: auditLogs.length
+                    summary: auditData.summary,
+                    events: auditData.events,
+                    totalEvents: auditData.summary.totalEvents,
+                    pagination: auditData.pagination
                 }
             });
         } catch (error) {
             logger.error('Get audit log error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * POST /api/attempts/:attemptId/heartbeat
+     * Heartbeat endpoint to keep attempt alive
+     */
+    async heartbeat(req, res, next) {
+        try {
+            const { attemptId } = req.params;
+            const { sessionId } = req.body;
+            const userId = req.user._id;
+
+            // Verify attempt belongs to user and is active
+            const attempt = await QuizAttempt.findOne({
+                _id: attemptId,
+                user: userId,
+                status: 'in_progress'
+            });
+
+            if (!attempt) {
+                return res.status(404).json({
+                    success: false,
+                    error: 'Active attempt not found'
+                });
+            }
+
+            // Validate session ID
+            if (sessionId !== attempt.sessionId) {
+                // Multiple session detected
+                await auditService.createAuditEvent({
+                    attempt,
+                    eventType: 'multiple_session',
+                    meta: {
+                        expectedSession: attempt.sessionId,
+                        providedSession: sessionId
+                    },
+                    req
+                });
+
+                return res.status(403).json({
+                    success: false,
+                    error: 'Invalid session detected'
+                });
+            }
+
+            // Check if attempt has expired
+            if (attempt.expiresAt && new Date() > attempt.expiresAt) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Attempt has expired'
+                });
+            }
+
+            // Update last heartbeat timestamp
+            attempt.lastHeartbeatAt = new Date();
+            await attempt.save();
+
+            // Log heartbeat event
+            await auditService.createAuditEvent({
+                attempt,
+                eventType: 'heartbeat',
+                req
+            });
+
+            res.json({
+                success: true,
+                serverTime: new Date(),
+                expiresAt: attempt.expiresAt,
+                riskScore: attempt.riskScore,
+                riskLevel: attempt.riskLevel
+            });
+        } catch (error) {
+            logger.error('Heartbeat error:', error);
             next(error);
         }
     }
@@ -931,6 +1148,365 @@ class AttemptsController {
             [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
         }
         return shuffled;
+    }
+
+    /**
+     * GET /api/monitoring/overview
+     * Get overall anti-cheating statistics (Trainer/Admin)
+     */
+    async getMonitoringOverview(req, res, next) {
+        try {
+            const { startDate, endDate, quizId } = req.query;
+
+            const stats = await monitoringService.getOverallStats({
+                startDate,
+                endDate,
+                quizId
+            });
+
+            res.json({
+                success: true,
+                data: stats
+            });
+        } catch (error) {
+            logger.error('Get monitoring overview error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/suspicious
+     * Get suspicious attempts (Trainer/Admin)
+     */
+    async getSuspiciousAttempts(req, res, next) {
+        try {
+            const { page, limit, quizId, riskLevel, minRiskScore } = req.query;
+
+            const result = await monitoringService.getSuspiciousAttempts({
+                page,
+                limit,
+                quizId,
+                riskLevel,
+                minRiskScore
+            });
+
+            res.json({
+                success: true,
+                data: result
+            });
+        } catch (error) {
+            logger.error('Get suspicious attempts error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/attempt/:attemptId/details
+     * Get detailed audit information for an attempt (Trainer/Admin)
+     */
+    async getAttemptAuditDetails(req, res, next) {
+        try {
+            const { attemptId } = req.params;
+
+            const details = await monitoringService.getAttemptAuditDetails(attemptId);
+
+            res.json({
+                success: true,
+                data: details
+            });
+        } catch (error) {
+            logger.error('Get attempt audit details error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/quiz/:quizId/stats
+     * Get quiz-specific anti-cheating statistics (Trainer/Admin)
+     */
+    async getQuizMonitoringStats(req, res, next) {
+        try {
+            const { quizId } = req.params;
+
+            const stats = await monitoringService.getQuizStats(quizId);
+
+            res.json({
+                success: true,
+                data: stats
+            });
+        } catch (error) {
+            logger.error('Get quiz monitoring stats error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/student/:studentId/history
+     * Get student anti-cheating history (Trainer/Admin)
+     */
+    async getStudentAntiCheatHistory(req, res, next) {
+        try {
+            const { studentId } = req.params;
+
+            const history = await monitoringService.getStudentHistory(studentId);
+
+            res.json({
+                success: true,
+                data: history
+            });
+        } catch (error) {
+            logger.error('Get student anti-cheat history error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/realtime
+     * Get real-time monitoring data (Trainer/Admin)
+     */
+    async getRealTimeMonitoring(req, res, next) {
+        try {
+            const monitoringData = await monitoringService.getRealTimeMonitoring();
+
+            res.json({
+                success: true,
+                data: monitoringData
+            });
+        } catch (error) {
+            logger.error('Get real-time monitoring error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/flagged
+     * Get flagged attempts requiring review (Trainer/Admin)
+     */
+    async getFlaggedAttempts(req, res, next) {
+        try {
+            const { page, limit, quizId, priority } = req.query;
+
+            const result = await monitoringService.getFlaggedAttempts({
+                page,
+                limit,
+                quizId,
+                priority
+            });
+
+            res.json({
+                success: true,
+                data: result
+            });
+        } catch (error) {
+            logger.error('Get flagged attempts error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/export
+     * Export monitoring data (Trainer/Admin)
+     */
+    async exportMonitoringData(req, res, next) {
+        try {
+            const { startDate, endDate, quizId, format } = req.query;
+
+            const exportData = await monitoringService.exportMonitoringData({
+                startDate,
+                endDate,
+                quizId,
+                format
+            });
+
+            res.json({
+                success: true,
+                data: exportData
+            });
+        } catch (error) {
+            logger.error('Export monitoring data error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * POST /api/monitoring/batch
+     * Get batch monitoring data for multiple quizzes (Trainer/Admin)
+     */
+    async getBatchMonitoringData(req, res, next) {
+        try {
+            const { quizIds, includeRealTime, includeStats } = req.body;
+
+            const batchData = await monitoringService.getBatchMonitoringData({
+                quizIds,
+                includeRealTime,
+                includeStats
+            });
+
+            res.json({
+                success: true,
+                data: batchData
+            });
+        } catch (error) {
+            logger.error('Get batch monitoring data error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/trainer/dashboard
+     * Get trainer's complete dashboard summary (Trainer)
+     */
+    async getTrainerDashboardSummary(req, res, next) {
+        try {
+            const trainerId = req.user._id;
+
+            const dashboardData = await monitoringService.getTrainerDashboardSummary(trainerId);
+
+            res.json({
+                success: true,
+                data: dashboardData
+            });
+        } catch (error) {
+            logger.error('Get trainer dashboard summary error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * POST /api/monitoring/compare
+     * Get comparative analysis between multiple quizzes (Trainer/Admin)
+     */
+    async getComparativeAnalysis(req, res, next) {
+        try {
+            const { quizIds, startDate, endDate } = req.body;
+
+            const comparisonData = await monitoringService.getComparativeAnalysis({
+                quizIds,
+                startDate,
+                endDate
+            });
+
+            res.json({
+                success: true,
+                data: comparisonData
+            });
+        } catch (error) {
+            logger.error('Get comparative analysis error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/quizzes/available
+     * Get available quizzes for monitoring with filtering (Trainer/Admin)
+     */
+    async getAvailableQuizzes(req, res, next) {
+        try {
+            const { subject, search, status, page, limit } = req.query;
+            const userId = req.user._id;
+            const role = req.user.role;
+
+            const availableQuizzes = await monitoringService.getAvailableQuizzes({
+                userId,
+                role,
+                subject,
+                search,
+                status,
+                page,
+                limit
+            });
+
+            res.json({
+                success: true,
+                data: availableQuizzes
+            });
+        } catch (error) {
+            logger.error('Get available quizzes error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/quizzes/subjects
+     * Get subjects for quiz filtering (Trainer/Admin)
+     */
+    async getSubjectsForFilter(req, res, next) {
+        try {
+            const subjects = await monitoringService.getSubjectsForFilter();
+
+            res.json({
+                success: true,
+                data: subjects
+            });
+        } catch (error) {
+            logger.error('Get subjects for filter error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * POST /api/monitoring/quizzes/switch
+     * Switch to monitor a specific quiz (Trainer/Admin)
+     */
+    async switchToQuiz(req, res, next) {
+        try {
+            const { quizId, includeRealTime, includeStats } = req.body;
+
+            const quizData = await monitoringService.switchToQuiz(quizId, {
+                includeRealTime,
+                includeStats
+            });
+
+            res.json({
+                success: true,
+                data: quizData
+            });
+        } catch (error) {
+            logger.error('Switch to quiz error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * GET /api/monitoring/quizzes/categories
+     * Get quiz categories for advanced filtering (Trainer/Admin)
+     */
+    async getQuizCategories(req, res, next) {
+        try {
+            const categories = await monitoringService.getQuizCategories();
+
+            res.json({
+                success: true,
+                data: categories
+            });
+        } catch (error) {
+            logger.error('Get quiz categories error:', error);
+            next(error);
+        }
+    }
+
+    /**
+     * POST /api/monitoring/quizzes/search
+     * Search quizzes by multiple criteria (Trainer/Admin)
+     */
+    async searchQuizzes(req, res, next) {
+        try {
+            const searchCriteria = {
+                ...req.body,
+                userId: req.user._id,
+                role: req.user.role
+            };
+
+            const searchResults = await monitoringService.searchQuizzes(searchCriteria);
+
+            res.json({
+                success: true,
+                data: searchResults
+            });
+        } catch (error) {
+            logger.error('Search quizzes error:', error);
+            next(error);
+        }
     }
 }
 

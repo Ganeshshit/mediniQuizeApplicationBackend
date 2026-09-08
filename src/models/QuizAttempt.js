@@ -50,10 +50,20 @@ const quizAttemptSchema = new Schema({
         required: true,
         min: 1
     },
+    attemptIndex: {
+        type: Number,
+        required: true,
+        min: 1
+    },
     attemptToken: {
         type: String,
         required: true,
         unique: true,
+        index: true
+    },
+    sessionId: {
+        type: String,
+        required: true,
         index: true
     },
 
@@ -68,9 +78,17 @@ const quizAttemptSchema = new Schema({
         type: Date,
         index: true
     },
+    expiresAt: {
+        type: Date,
+        index: true
+    },
     timeSpentSeconds: {
         type: Number,
         min: 0
+    },
+    lastHeartbeatAt: {
+        type: Date,
+        index: true
     },
 
     // Status tracking
@@ -276,6 +294,28 @@ const quizAttemptSchema = new Schema({
         min: 0
     },
 
+    // Risk-based anti-cheat scoring
+    riskScore: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    riskLevel: {
+        type: String,
+        enum: ['low', 'medium', 'high', 'critical'],
+        default: 'low'
+    },
+    violationCount: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    suspicious: {
+        type: Boolean,
+        default: false,
+        index: true
+    },
+
     // Resume tracking
     resumeCount: {
         type: Number,
@@ -365,8 +405,11 @@ quizAttemptSchema.index({ quiz: 1, user: 1 });
 quizAttemptSchema.index({ user: 1, status: 1 });
 quizAttemptSchema.index({ quiz: 1, status: 1 });
 quizAttemptSchema.index({ isFlagged: 1, reviewStatus: 1 });
+quizAttemptSchema.index({ suspicious: 1, riskLevel: 1 });
 quizAttemptSchema.index({ createdAt: -1 });
 quizAttemptSchema.index({ attemptToken: 1 }, { unique: true });
+quizAttemptSchema.index({ sessionId: 1 });
+quizAttemptSchema.index({ expiresAt: 1, status: 1 });
 
 // Pre-save middleware
 quizAttemptSchema.pre('save', function (next) {
