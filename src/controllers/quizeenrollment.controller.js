@@ -103,12 +103,14 @@ class QuizEnrollmentController {
 
             res.json({
                 success: true,
-                data: students,
-                pagination: {
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    total,
-                    pages: Math.ceil(total / parseInt(limit))
+                data: {
+                    students,
+                    pagination: {
+                        page: parseInt(page),
+                        limit: parseInt(limit),
+                        total,
+                        pages: Math.ceil(total / parseInt(limit))
+                    }
                 }
             });
         } catch (error) {
@@ -194,17 +196,19 @@ class QuizEnrollmentController {
 
             res.json({
                 success: true,
-                data: enrichedEnrollments,
-                pagination: {
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    total,
-                    pages: Math.ceil(total / parseInt(limit))
-                },
-                quiz: {
-                    id: quiz._id,
-                    title: quiz.title,
-                    isPublished: quiz.isPublished
+                data: {
+                    students: enrichedEnrollments,
+                    pagination: {
+                        page: parseInt(page),
+                        limit: parseInt(limit),
+                        total,
+                        pages: Math.ceil(total / parseInt(limit))
+                    },
+                    quiz: {
+                        id: quiz._id,
+                        title: quiz.title,
+                        isPublished: quiz.isPublished
+                    }
                 }
             });
         } catch (error) {
@@ -294,17 +298,19 @@ class QuizEnrollmentController {
 
             res.json({
                 success: true,
-                data: students,
-                pagination: {
-                    page: parseInt(page),
-                    limit: parseInt(limit),
-                    total,
-                    pages: Math.ceil(total / parseInt(limit))
-                },
-                quiz: {
-                    id: quiz._id,
-                    title: quiz.title,
-                    isPublished: quiz.isPublished
+                data: {
+                    students,
+                    pagination: {
+                        page: parseInt(page),
+                        limit: parseInt(limit),
+                        total,
+                        pages: Math.ceil(total / parseInt(limit))
+                    },
+                    quiz: {
+                        id: quiz._id,
+                        title: quiz.title,
+                        isPublished: quiz.isPublished
+                    }
                 }
             });
         } catch (error) {
@@ -320,9 +326,6 @@ class QuizEnrollmentController {
     // ENROLL SINGLE STUDENT
     // ============================================
     async enrollSingleStudent(req, res, next) {
-        const session = await mongoose.startSession();
-        session.startTransaction();
-
         try {
             const { quizId } = req.params;
             const { studentId } = req.body;
@@ -335,10 +338,9 @@ class QuizEnrollmentController {
                 _id: studentId,
                 role: 'student',
                 isActive: true
-            }).session(session);
+            });
 
             if (!student) {
-                await session.abortTransaction();
                 return res.status(404).json({
                     success: false,
                     error: 'Student not found or inactive'
@@ -349,10 +351,9 @@ class QuizEnrollmentController {
             const existingEnrollment = await QuizEnrollment.findOne({
                 quiz: quizId,
                 student: studentId
-            }).session(session);
+            });
 
             if (existingEnrollment) {
-                await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
                     error: 'Student is already enrolled in this quiz'
@@ -366,27 +367,22 @@ class QuizEnrollmentController {
                 enrolledAt: new Date()
             });
 
-            await enrollment.save({ session });
-            await session.commitTransaction();
-
+            await enrollment.save();
             await enrollment.populate('student', 'name email rollNo registrationNo semester department');
 
             logger.info(`Student ${studentId} enrolled in quiz ${quizId} by ${req.user.email}`);
 
-            res.status(201).json({
+            res.status(200).json({
                 success: true,
                 message: 'Student enrolled successfully',
                 data: enrollment
             });
         } catch (error) {
-            await session.abortTransaction();
             logger.error('Enroll single student error:', error);
             if (error.message.includes('Access denied')) {
                 return res.status(403).json({ success: false, error: error.message });
             }
             next(error);
-        } finally {
-            session.endSession();
         }
     }
 
@@ -394,9 +390,6 @@ class QuizEnrollmentController {
     // ENROLL MULTIPLE STUDENTS
     // ============================================
     async enrollMultipleStudents(req, res, next) {
-        const session = await mongoose.startSession();
-        session.startTransaction();
-
         try {
             const { quizId } = req.params;
             const { studentIds } = req.body;
@@ -409,10 +402,9 @@ class QuizEnrollmentController {
                 _id: { $in: studentIds },
                 role: 'student',
                 isActive: true
-            }).session(session);
+            });
 
             if (students.length !== studentIds.length) {
-                await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
                     error: 'Some student IDs are invalid or inactive'
@@ -423,13 +415,12 @@ class QuizEnrollmentController {
             const existingEnrollments = await QuizEnrollment.find({
                 quiz: quizId,
                 student: { $in: studentIds }
-            }).session(session);
+            });
 
             const alreadyEnrolledIds = existingEnrollments.map(e => e.student.toString());
             const newStudentIds = studentIds.filter(id => !alreadyEnrolledIds.includes(id.toString()));
 
             if (newStudentIds.length === 0) {
-                await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
                     error: 'All students are already enrolled'
@@ -443,12 +434,11 @@ class QuizEnrollmentController {
                 enrolledAt: new Date()
             }));
 
-            const createdEnrollments = await QuizEnrollment.insertMany(enrollments, { session });
-            await session.commitTransaction();
+            const createdEnrollments = await QuizEnrollment.insertMany(enrollments);
 
             logger.info(`${createdEnrollments.length} students enrolled in quiz ${quizId} by ${req.user.email}`);
 
-            res.status(201).json({
+            res.status(200).json({
                 success: true,
                 message: `${createdEnrollments.length} students enrolled successfully`,
                 data: {
@@ -458,14 +448,11 @@ class QuizEnrollmentController {
                 }
             });
         } catch (error) {
-            await session.abortTransaction();
             logger.error('Enroll multiple students error:', error);
             if (error.message.includes('Access denied')) {
                 return res.status(403).json({ success: false, error: error.message });
             }
             next(error);
-        } finally {
-            session.endSession();
         }
     }
 
@@ -473,9 +460,6 @@ class QuizEnrollmentController {
     // ENROLL BY CRITERIA
     // ============================================
     async enrollByCriteria(req, res, next) {
-        const session = await mongoose.startSession();
-        session.startTransaction();
-
         try {
             const { quizId } = req.params;
             const { semester, department, registeredFrom, registeredTo, enrollAll } = req.body;
@@ -508,7 +492,6 @@ class QuizEnrollmentController {
 
                 // Ensure at least one criteria is provided
                 if (!semester && !department && !registeredFrom && !registeredTo) {
-                    await session.abortTransaction();
                     return res.status(400).json({
                         success: false,
                         error: 'At least one criteria must be provided (semester, department, or date range)'
@@ -518,11 +501,9 @@ class QuizEnrollmentController {
 
             // Get matching students
             const students = await User.find(studentQuery)
-                .select('_id')
-                .session(session);
+                .select('_id');
 
             if (students.length === 0) {
-                await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
                     error: 'No students found matching the criteria'
@@ -535,13 +516,12 @@ class QuizEnrollmentController {
             const existingEnrollments = await QuizEnrollment.find({
                 quiz: quizId,
                 student: { $in: studentIds }
-            }).session(session);
+            });
 
             const alreadyEnrolledIds = existingEnrollments.map(e => e.student.toString());
             const newStudentIds = studentIds.filter(id => !alreadyEnrolledIds.includes(id.toString()));
 
             if (newStudentIds.length === 0) {
-                await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
                     error: 'All matching students are already enrolled'
@@ -555,12 +535,11 @@ class QuizEnrollmentController {
                 enrolledAt: new Date()
             }));
 
-            const createdEnrollments = await QuizEnrollment.insertMany(enrollments, { session });
-            await session.commitTransaction();
+            const createdEnrollments = await QuizEnrollment.insertMany(enrollments);
 
             logger.info(`${createdEnrollments.length} students enrolled by criteria in quiz ${quizId} by ${req.user.email}`);
 
-            res.status(201).json({
+            res.status(200).json({
                 success: true,
                 message: `${createdEnrollments.length} students enrolled successfully`,
                 data: {
@@ -571,14 +550,11 @@ class QuizEnrollmentController {
                 }
             });
         } catch (error) {
-            await session.abortTransaction();
             logger.error('Enroll by criteria error:', error);
             if (error.message.includes('Access denied')) {
                 return res.status(403).json({ success: false, error: error.message });
             }
             next(error);
-        } finally {
-            session.endSession();
         }
     }
 
@@ -586,9 +562,6 @@ class QuizEnrollmentController {
     // UNENROLL SINGLE STUDENT
     // ============================================
     async unenrollSingleStudent(req, res, next) {
-        const session = await mongoose.startSession();
-        session.startTransaction();
-
         try {
             const { quizId } = req.params;
             const { studentId } = req.body;
@@ -600,10 +573,9 @@ class QuizEnrollmentController {
             const attemptCount = await QuizAttempt.countDocuments({
                 quiz: quizId,
                 user: studentId
-            }).session(session);
+            });
 
             if (attemptCount > 0) {
-                await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
                     error: 'Cannot unenroll student who has already attempted the quiz',
@@ -615,17 +587,14 @@ class QuizEnrollmentController {
             const result = await QuizEnrollment.deleteOne({
                 quiz: quizId,
                 student: studentId
-            }).session(session);
+            });
 
             if (result.deletedCount === 0) {
-                await session.abortTransaction();
                 return res.status(404).json({
                     success: false,
                     error: 'Enrollment not found'
                 });
             }
-
-            await session.commitTransaction();
 
             logger.info(`Student ${studentId} unenrolled from quiz ${quizId} by ${req.user.email}`);
 
@@ -634,14 +603,11 @@ class QuizEnrollmentController {
                 message: 'Student unenrolled successfully'
             });
         } catch (error) {
-            await session.abortTransaction();
             logger.error('Unenroll single student error:', error);
             if (error.message.includes('Access denied')) {
                 return res.status(403).json({ success: false, error: error.message });
             }
             next(error);
-        } finally {
-            session.endSession();
         }
     }
 
@@ -649,9 +615,6 @@ class QuizEnrollmentController {
     // UNENROLL MULTIPLE STUDENTS
     // ============================================
     async unenrollMultipleStudents(req, res, next) {
-        const session = await mongoose.startSession();
-        session.startTransaction();
-
         try {
             const { quizId } = req.params;
             const { studentIds } = req.body;
@@ -663,7 +626,7 @@ class QuizEnrollmentController {
             const studentsWithAttempts = await QuizAttempt.distinct('user', {
                 quiz: quizId,
                 user: { $in: studentIds }
-            }).session(session);
+            });
 
             const studentIdsWithAttempts = studentsWithAttempts.map(id => id.toString());
             const safeToUnenrollIds = studentIds.filter(
@@ -671,7 +634,6 @@ class QuizEnrollmentController {
             );
 
             if (safeToUnenrollIds.length === 0) {
-                await session.abortTransaction();
                 return res.status(400).json({
                     success: false,
                     error: 'All selected students have already attempted the quiz',
@@ -683,9 +645,7 @@ class QuizEnrollmentController {
             const result = await QuizEnrollment.deleteMany({
                 quiz: quizId,
                 student: { $in: safeToUnenrollIds }
-            }).session(session);
-
-            await session.commitTransaction();
+            });
 
             logger.info(`${result.deletedCount} students unenrolled from quiz ${quizId} by ${req.user.email}`);
 
@@ -699,14 +659,11 @@ class QuizEnrollmentController {
                 }
             });
         } catch (error) {
-            await session.abortTransaction();
             logger.error('Unenroll multiple students error:', error);
             if (error.message.includes('Access denied')) {
                 return res.status(403).json({ success: false, error: error.message });
             }
             next(error);
-        } finally {
-            session.endSession();
         }
     }
 

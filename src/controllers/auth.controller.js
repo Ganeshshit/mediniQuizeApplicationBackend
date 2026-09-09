@@ -175,6 +175,9 @@ const sendEmail = async (to, subject, html) => {
 //         });
 //     }
 // };
+
+
+
 exports.register = async (req, res) => {
     try {
         const {
@@ -197,21 +200,49 @@ exports.register = async (req, res) => {
 
         if (missing.length > 0) {
             return res.status(400).json({
+                success: false,
                 error: "Missing required fields",
                 missing
+            });
+        }
+
+        // Name length validation
+        if (name.length < 2 || name.length > 100) {
+            return res.status(400).json({
+                success: false,
+                error: "Name must be between 2 and 100 characters"
+            });
+        }
+
+        // Phone number validation
+        const phoneRegex = /^[0-9]{10}$/;
+        if (!phoneRegex.test(phoneNo)) {
+            return res.status(400).json({
+                success: false,
+                error: "Phone number must be 10 digits"
+            });
+        }
+
+        // Email format validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({
+                success: false,
+                error: "Invalid email format"
             });
         }
 
         // Check if email exists
         const emailExists = await User.findOne({ email });
         if (emailExists) {
-            return res.status(400).json({ error: "Email already registered" });
+            return res.status(400).json({ success: false, error: "Email already registered" });
         }
 
         // Password strength validation
         const passwordCheck = PasswordUtil.validate(password);
         if (!passwordCheck.valid) {
             return res.status(400).json({
+                success: false,
                 error: "Weak password",
                 details: passwordCheck.errors
             });
@@ -255,23 +286,27 @@ exports.register = async (req, res) => {
         const tokens = JWTUtil.generateTokenPair(user._id, "student");
 
         return res.status(201).json({
+            success: true,
             message: "Registration successful. Please verify your email.",
-            user: {
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-                phoneNo: user.phoneNo,
-                usn: user.usn,
-                collegeName: user.collegeName,
-                role: user.role,
-                isVerified: user.isVerified
-            },
-            ...tokens
+            data: {
+                user: {
+                    _id: user._id,
+                    name: user.name,
+                    email: user.email,
+                    phoneNo: user.phoneNo,
+                    usn: user.usn,
+                    collegeName: user.collegeName,
+                    role: user.role,
+                    isVerified: user.isVerified
+                },
+                ...tokens
+            }
         });
 
     } catch (err) {
         console.error("REGISTER ERROR:", err);
         return res.status(500).json({
+            success: false,
             error: "Registration failed",
             details: err.message
         });
@@ -286,15 +321,29 @@ exports.login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
+        if (!email) {
+            return res.status(400).json({ success: false, error: "Email is required" });
+        }
+        if (!password) {
+            return res.status(400).json({ success: false, error: "Password is required" });
+        }
+
+        // Email format validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ success: false, error: "Invalid email format" });
+        }
+
         const user = await User.findOne({ email }).select("+passwordHash");
         if (!user) {
-            return res.status(401).json({ error: "Invalid email or password" });
+            return res.status(401).json({ success: false, error: "Invalid email or password" });
         }
 
         // Account locked?
         if (user.accountLockedUntil && user.accountLockedUntil > Date.now()) {
             const minutes = Math.ceil((user.accountLockedUntil - Date.now()) / 60000);
             return res.status(423).json({
+                success: false,
                 error: `Account locked. Try again in ${minutes} minutes.`
             });
         }
@@ -302,6 +351,7 @@ exports.login = async (req, res) => {
         // Check active
         if (!user.isActive) {
             return res.status(403).json({
+                success: false,
                 error: "Account disabled. Contact support."
             });
         }
@@ -315,12 +365,13 @@ exports.login = async (req, res) => {
                 user.accountLockedUntil = Date.now() + 30 * 60 * 1000;
                 await user.save();
                 return res.status(423).json({
+                    success: false,
                     error: "Too many attempts. Account locked for 30 min."
                 });
             }
 
             await user.save();
-            return res.status(401).json({ error: "Invalid email or password" });
+            return res.status(401).json({ success: false, error: "Invalid email or password" });
         }
 
         // Reset failed attempts
@@ -334,53 +385,58 @@ exports.login = async (req, res) => {
         const tokens = JWTUtil.generateTokenPair(user._id, user.role);
 
         return res.status(200).json({
+            success: true,
             message: "Login successful",
-            user: {
-                _id: user._id,
-                name: user.name,
-                email: user.email,
-                role: user.role,
-                semester: user.semester,
-                department: user.department,
-                batch: user.batch,
-                rollNo: user.rollNo,
-                registrationNo: user.registrationNo,
-                profilePicture: user.profilePicture
-            },
-            ...tokens
+            data: {
+                user: {
+                    _id: user._id,
+                    name: user.name,
+                    email: user.email,
+                    role: user.role,
+                    semester: user.semester,
+                    department: user.department,
+                    batch: user.batch,
+                    rollNo: user.rollNo,
+                    registrationNo: user.registrationNo,
+                    profilePicture: user.profilePicture
+                },
+                ...tokens
+            }
         });
 
     } catch (err) {
         console.error("LOGIN ERROR:", err);
-        return res.status(500).json({ error: "Login failed" });
+        return res.status(500).json({ success: false, error: "Login failed" });
     }
 };
 
 // ==================================================
 // REFRESH TOKEN
-// POST /api/auth/refresh
 // ==================================================
 exports.refresh = async (req, res) => {
     try {
         const { refreshToken } = req.body;
 
         if (!refreshToken)
-            return res.status(400).json({ error: "Refresh token required" });
+            return res.status(400).json({ success: false, error: "Refresh token required" });
 
         const decoded = JWTUtil.verifyRefreshToken(refreshToken);
 
         const user = await User.findById(decoded.userId);
-        if (!user) return res.status(401).json({ error: "Invalid token" });
+        if (!user) return res.status(401).json({ success: false, error: "Invalid token" });
 
         const tokens = JWTUtil.generateTokenPair(user._id, user.role);
 
         return res.status(200).json({
+            success: true,
             message: "Token refreshed",
-            ...tokens
+            data: {
+                ...tokens
+            }
         });
 
     } catch (err) {
-        return res.status(401).json({ error: err.message });
+        return res.status(401).json({ success: false, error: err.message });
     }
 };
 
@@ -391,9 +447,19 @@ exports.forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
 
+        if (!email) {
+            return res.status(400).json({ success: false, error: "Email is required" });
+        }
+
+        // Simple email validation
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ success: false, error: "Invalid email format" });
+        }
+
         const user = await User.findOne({ email });
         if (!user)
-            return res.status(200).json({ message: "Reset link sent if email exists." });
+            return res.status(200).json({ success: true, message: "Reset link sent if email exists." });
 
         const resetToken = crypto.randomBytes(32).toString("hex");
         user.resetPasswordToken = crypto.createHash("sha256").update(resetToken).digest("hex");
@@ -409,10 +475,10 @@ exports.forgotPassword = async (req, res) => {
              <a href="${resetURL}">${resetURL}</a>`
         );
 
-        res.json({ message: "Reset link sent to email if exists." });
+        res.json({ success: true, message: "Reset link sent to email if exists." });
 
     } catch (err) {
-        res.status(500).json({ error: "Error processing request" });
+        res.status(500).json({ success: false, error: "Error processing request" });
     }
 };
 
@@ -423,6 +489,13 @@ exports.resetPassword = async (req, res) => {
     try {
         const { token, newPassword } = req.body;
 
+        if (!token) {
+            return res.status(400).json({ success: false, error: "Token is required" });
+        }
+        if (!newPassword) {
+            return res.status(400).json({ success: false, error: "New password is required" });
+        }
+
         const hashed = crypto.createHash("sha256").update(token).digest("hex");
 
         const user = await User.findOne({
@@ -431,12 +504,12 @@ exports.resetPassword = async (req, res) => {
         });
 
         if (!user) {
-            return res.status(400).json({ error: "Invalid or expired token" });
+            return res.status(401).json({ success: false, error: "Invalid or expired token" });
         }
 
         const strength = PasswordUtil.validate(newPassword);
         if (!strength.valid) {
-            return res.status(400).json({ error: "Weak password", details: strength.errors });
+            return res.status(400).json({ success: false, error: "Weak password", details: strength.errors });
         }
 
         user.passwordHash = await PasswordUtil.hash(newPassword);
@@ -450,10 +523,10 @@ exports.resetPassword = async (req, res) => {
             `<p>Your password has been updated.</p>`
         );
 
-        res.json({ message: "Password reset successfully." });
+        res.json({ success: true, message: "Password reset successfully." });
 
     } catch (err) {
-        res.status(500).json({ error: "Reset failed" });
+        res.status(500).json({ success: false, error: "Reset failed" });
     }
 };
 

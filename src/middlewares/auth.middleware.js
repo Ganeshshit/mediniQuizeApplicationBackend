@@ -7,7 +7,7 @@ const authMiddleware = async (req, res, next) => {
         const token = req.headers.authorization?.split(' ')[1];
 
         if (!token) {
-            return res.status(401).json({ error: 'No token provided' });
+            return res.status(401).json({ success: false, error: 'No token provided' });
         }
 
         // Use your custom validator (checks issuer, audience, expiry)
@@ -16,7 +16,7 @@ const authMiddleware = async (req, res, next) => {
         const user = await User.findById(decoded.userId).select('-passwordHash');
 
         if (!user || !user.isActive) {
-            return res.status(401).json({ error: 'Invalid or inactive user' });
+            return res.status(401).json({ success: false, error: 'Invalid or inactive user' });
         }
 
         req.user = user;
@@ -24,7 +24,7 @@ const authMiddleware = async (req, res, next) => {
 
         next();
     } catch (error) {
-        return res.status(401).json({ error: error.message || 'Invalid token' });
+        return res.status(401).json({ success: false, error: error.message || 'Invalid token' });
     }
 };
 

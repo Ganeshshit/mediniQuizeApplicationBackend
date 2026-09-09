@@ -17,7 +17,7 @@ const listSubjects = async (req, res, next) => {
 
         const subjects = await Subject.find(filter).sort(sort).lean();
 
-        return res.status(200).json({ data: subjects });
+        return res.status(200).json({ success: true, data: { subjects } });
 
     } catch (err) {
         next(err);
@@ -37,6 +37,7 @@ const createSubject = async (req, res, next) => {
 
         if (existing) {
             return res.status(409).json({
+                success: false,
                 error: "Subject name or code already exists"
             });
         }
@@ -52,13 +53,15 @@ const createSubject = async (req, res, next) => {
         });
 
         return res.status(201).json({
+            success: true,
             message: "Subject created successfully",
-            data: subject
+            data: { subject }
         });
 
     } catch (err) {
         if (err.code === 11000) {
             return res.status(409).json({
+                success: false,
                 error: "Duplicate subject name or code"
             });
         }
@@ -82,17 +85,19 @@ const updateSubject = async (req, res, next) => {
         );
 
         if (!subject) {
-            return res.status(404).json({ error: 'Subject not found' });
+            return res.status(404).json({ success: false, error: 'Subject not found' });
         }
 
         return res.status(200).json({
+            success: true,
             message: 'Subject updated successfully',
-            data: subject
+            data: { subject }
         });
 
     } catch (err) {
         if (err.code === 11000) {
             return res.status(409).json({
+                success: false,
                 error: 'Duplicate subject name already exists'
             });
         }
@@ -106,10 +111,10 @@ const deleteSubject = async (req, res, next) => {
 
         const subject = await Subject.findByIdAndDelete(id);
         if (!subject) {
-            return res.status(404).json({ error: 'Subject not found' });
+            return res.status(404).json({ success: false, error: 'Subject not found' });
         }
 
-        return res.status(200).json({ message: 'Subject deleted successfully' });
+        return res.status(200).json({ success: true, message: 'Subject deleted successfully' });
 
     } catch (err) {
         next(err);

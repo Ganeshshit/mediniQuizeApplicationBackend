@@ -1,9 +1,12 @@
 // middlewares/validation.middleware.js
-const { celebrate, Joi, Segments } = require('celebrate');
+const { celebrate, Joi, Segments, errors } = require('celebrate');
 
 const validateRequest = (schema) => {
     return celebrate(schema, { abortEarly: false });
 };
+
+// Celebrate error handler
+const celebrateErrors = errors();
 
 // Common validation schemas
 const validationSchemas = {
@@ -12,4 +15,4 @@ const validationSchemas = {
     password: Joi.string().min(8).max(128),
 };
 
-module.exports = { validateRequest, validationSchemas, Joi, Segments };
+module.exports = { validateRequest, validationSchemas, Joi, Segments, celebrateErrors };
