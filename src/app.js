@@ -72,7 +72,16 @@ app.use((req, res, next) => {
 // HEALTH CHECK
 // ---------------------------------------------
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({
+        status: 'ok',
+        message: 'Service is running',
+        health: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        memoryUsage: process.memoryUsage(),
+        cpuUsage: process.cpuUsage(),
+        
+     });
 });
 
 // ---------------------------------------------
