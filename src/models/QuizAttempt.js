@@ -63,8 +63,9 @@ const quizAttemptSchema = new Schema({
     },
     sessionId: {
         type: String,
-        required: true,
-        index: true
+        default: function () {
+            return crypto.randomUUID();
+        }
     },
 
     // Timing (server authoritative)
