@@ -52,8 +52,8 @@ const quizAttemptSchema = new Schema({
     },
     attemptIndex: {
         type: Number,
-        required: true,
-        min: 1
+        // required: true,
+        default:1
     },
     attemptToken: {
         type: String,
