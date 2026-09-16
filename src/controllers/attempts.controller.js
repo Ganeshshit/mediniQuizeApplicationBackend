@@ -553,7 +553,7 @@ class AttemptsController {
             session.endSession();
         }
     }
-
+    
     /**
      * GET /api/quizzes/:quizId/attempts/:attemptId
      * Get attempt results
