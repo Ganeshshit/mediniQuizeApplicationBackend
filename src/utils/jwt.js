@@ -74,8 +74,8 @@ class JWTUtil {
     /**
      * Generate token pair
      */
-    generateTokenPair(userId, role) {
-        const payload = { userId, role };
+    generateTokenPair(userId, role, tokenVersion = 0) {
+        const payload = { userId, role, tokenVersion };
 
         return {
             accessToken: this.generateAccessToken(payload),

@@ -58,6 +58,21 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // ---------------------------------------------
+// RATE LIMITING (password reset - stricter)
+// ---------------------------------------------
+const passwordResetLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 5, // 5 requests per window
+    message: 'Too many password reset attempts. Please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => {
+        // Skip if testing environment
+        return process.env.NODE_ENV === 'test';
+    }
+});
+
+// ---------------------------------------------
 // REQUEST LOGGING
 // ---------------------------------------------
 app.use((req, res, next) => {

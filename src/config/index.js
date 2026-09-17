@@ -23,16 +23,21 @@ const config = {
         ? process.env.CORS_ORIGINS.split(',')
         : ['http://localhost:3000', 'http://localhost:5173', 'http://172.29.144.1:5173/','http://192.168.1.8:5173/'],
 
-    // Email (example with SendGrid/Nodemailer)
+    // Frontend URL for email links
+    frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
+
+    // Email (Nodemailer with SMTP)
     email: {
         from: process.env.EMAIL_FROM || 'noreply@quizapp.com',
         sendgridApiKey: process.env.SENDGRID_API_KEY,
-        // Or SMTP config
+        // SMTP config
         smtp: {
-            host: process.env.SMTP_HOST,
+            host:'smtp.gmail.com',
             port: parseInt(process.env.SMTP_PORT, 10) || 587,
-            user: process.env.SMTP_USER,
-            pass: process.env.SMTP_PASS
+            // user: process.env.SMTP_USER,
+            user:'shitganesh4@gmail.com',
+            // pass: process.env.SMTP_PASS
+            pass:'nxkycscupmhlkjab'
         }
     },
 

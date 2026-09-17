@@ -6,18 +6,9 @@ const crypto = require("crypto");
 const User = require("../models/User");
 const JWTUtil = require("../utils/jwt");
 const PasswordUtil = require("../utils/password");
-
-// --------------------------------------------------
-// Mock email sender (replace with nodemailer later)
-// --------------------------------------------------
-const sendEmail = async (to, subject, html) => {
-    console.log("---- EMAIL SENT ----");
-    console.log("To:", to);
-    console.log("Subject:", subject);
-    console.log("HTML:", html);
-    console.log("--------------------");
-    return true;
-};
+const passwordResetService = require("../services/password-reset.service");
+const emailService = require("../services/email.service");
+const config = require("../config");
 
 // ==================================================
 // REGISTER STUDENT
@@ -270,20 +261,12 @@ exports.register = async (req, res) => {
         });
 
         // Send verification email
-        const verifyURL = `${process.env.FRONTEND_URL}/verify-email?token=${verificationToken}`;
+        const verifyURL = `${config.frontendUrl}/verify-email?token=${verificationToken}`;
 
-        await sendEmail(
-            email,
-            "Verify Your Email",
-            `
-                <h2>Hello ${name}</h2>
-                <p>Please verify your email:</p>
-                <a href="${verifyURL}">${verifyURL}</a>
-            `
-        );
+        await emailService.sendVerificationEmail(email, verifyURL, name);
 
-        // Create tokens
-        const tokens = JWTUtil.generateTokenPair(user._id, "student");
+        // Create tokens with tokenVersion for session invalidation
+        const tokens = JWTUtil.generateTokenPair(user._id, "student", user.tokenVersion);
 
         return res.status(201).json({
             success: true,
@@ -381,8 +364,8 @@ exports.login = async (req, res) => {
         user.lastLoginIP = req.ip;
         await user.save();
 
-        // Generate tokens
-        const tokens = JWTUtil.generateTokenPair(user._id, user.role);
+        // Generate tokens with tokenVersion for session invalidation
+        const tokens = JWTUtil.generateTokenPair(user._id, user.role, user.tokenVersion);
 
         return res.status(200).json({
             success: true,
@@ -425,7 +408,8 @@ exports.refresh = async (req, res) => {
         const user = await User.findById(decoded.userId);
         if (!user) return res.status(401).json({ success: false, error: "Invalid token" });
 
-        const tokens = JWTUtil.generateTokenPair(user._id, user.role);
+        // Generate new tokens with current tokenVersion
+        const tokens = JWTUtil.generateTokenPair(user._id, user.role, user.tokenVersion);
 
         return res.status(200).json({
             success: true,
@@ -441,92 +425,129 @@ exports.refresh = async (req, res) => {
 };
 
 // ==================================================
-// FORGOT PASSWORD
+// FORGOT PASSWORD (SECURE IMPLEMENTATION)
 // ==================================================
 exports.forgotPassword = async (req, res) => {
     try {
         const { email } = req.body;
 
         if (!email) {
-            return res.status(400).json({ success: false, error: "Email is required" });
+            return res.status(400).json({ 
+                success: false, 
+                error: "Email is required" 
+            });
         }
 
-        // Simple email validation
+        // Email format validation
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         if (!emailRegex.test(email)) {
-            return res.status(400).json({ success: false, error: "Invalid email format" });
+            return res.status(400).json({ 
+                success: false, 
+                error: "Invalid email format" 
+            });
         }
 
-        const user = await User.findOne({ email });
-        if (!user)
-            return res.status(200).json({ success: true, message: "Reset link sent if email exists." });
+        // Get client metadata for security
+        const metadata = {
+            ipAddress: req.ip || req.headers['x-forwarded-for'] || req.connection.remoteAddress,
+            userAgent: req.headers['user-agent']
+        };
 
-        const resetToken = crypto.randomBytes(32).toString("hex");
-        user.resetPasswordToken = crypto.createHash("sha256").update(resetToken).digest("hex");
-        user.resetPasswordExpiry = Date.now() + 60 * 60 * 1000; // 1 hour
-        await user.save();
+        // Initiate password reset (always returns success to prevent email enumeration)
+        const result = await passwordResetService.initiatePasswordReset(email, metadata);
 
-        const resetURL = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+        // If user exists and token was created, send email
+        if (result.userExists && result.resetToken) {
+            const resetURL = `${config.frontendUrl}/reset-password?token=${result.resetToken}`;
+            
+            await emailService.sendPasswordResetEmail(email, resetURL);
+        }
 
-        await sendEmail(
-            email,
-            "Password Reset",
-            `<p>Click to reset password:</p>
-             <a href="${resetURL}">${resetURL}</a>`
-        );
-
-        res.json({ success: true, message: "Reset link sent to email if exists." });
+        // Always return the same message for security
+        res.json({ 
+            success: true, 
+            message: "If an account exists for this email, a password reset link has been sent." 
+        });
 
     } catch (err) {
-        res.status(500).json({ success: false, error: "Error processing request" });
+        console.error("FORGOT PASSWORD ERROR:", err);
+        // Still return success to prevent email enumeration
+        res.json({ 
+            success: true, 
+            message: "If an account exists for this email, a password reset link has been sent." 
+        });
     }
 };
 
 // ==================================================
-// RESET PASSWORD
+// RESET PASSWORD (SECURE IMPLEMENTATION)
 // ==================================================
 exports.resetPassword = async (req, res) => {
     try {
         const { token, newPassword } = req.body;
 
         if (!token) {
-            return res.status(400).json({ success: false, error: "Token is required" });
+            return res.status(400).json({ 
+                success: false, 
+                error: "Token is required" 
+            });
         }
         if (!newPassword) {
-            return res.status(400).json({ success: false, error: "New password is required" });
+            return res.status(400).json({ 
+                success: false, 
+                error: "New password is required" 
+            });
         }
 
-        const hashed = crypto.createHash("sha256").update(token).digest("hex");
+        // Use the secure password reset service
+        const result = await passwordResetService.resetPassword(token, newPassword);
 
-        const user = await User.findOne({
-            resetPasswordToken: hashed,
-            resetPasswordExpiry: { $gt: Date.now() }
+        if (!result.success) {
+            // Map specific error reasons to appropriate status codes
+            const errorMap = {
+                'invalid_token': { status: 400, message: 'Invalid reset link' },
+                'already_used': { status: 400, message: 'Reset link has already been used' },
+                'expired': { status: 400, message: 'Reset link has expired' },
+                'account_inactive': { status: 403, message: 'Account is inactive' },
+                'weak_password': { status: 400, message: 'Password does not meet requirements', details: result.details },
+                'server_error': { status: 500, message: 'Server error occurred' }
+            };
+
+            const errorInfo = errorMap[result.reason] || { status: 400, message: 'Password reset failed' };
+            
+            return res.status(errorInfo.status).json({ 
+                success: false, 
+                error: errorInfo.message,
+                ...(result.details && { details: result.details })
+            });
+        }
+
+        // Send confirmation email
+        try {
+            // Get user email from the token validation
+            const validation = await passwordResetService.validatePasswordResetToken(token);
+            if (validation.valid && validation.user) {
+                await emailService.sendPasswordChangeConfirmation(
+                    validation.user.email,
+                    validation.user.name
+                );
+            }
+        } catch (emailError) {
+            // Log but don't fail the reset if email fails
+            console.error('Failed to send password change confirmation:', emailError);
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Password reset successfully. Please log in with your new password." 
         });
 
-        if (!user) {
-            return res.status(401).json({ success: false, error: "Invalid or expired token" });
-        }
-
-        const strength = PasswordUtil.validate(newPassword);
-        if (!strength.valid) {
-            return res.status(400).json({ success: false, error: "Weak password", details: strength.errors });
-        }
-
-        user.passwordHash = await PasswordUtil.hash(newPassword);
-        user.resetPasswordToken = undefined;
-        user.resetPasswordExpiry = undefined;
-        await user.save();
-
-        await sendEmail(
-            user.email,
-            "Password Reset Successful",
-            `<p>Your password has been updated.</p>`
-        );
-
-        res.json({ success: true, message: "Password reset successfully." });
-
     } catch (err) {
-        res.status(500).json({ success: false, error: "Reset failed" });
+        console.error("RESET PASSWORD ERROR:", err);
+        res.status(500).json({ 
+            success: false, 
+            error: "Password reset failed" 
+        });
     }
 };
 
@@ -575,18 +596,78 @@ exports.resendVerification = async (req, res) => {
         user.verificationTokenExpiry = Date.now() + 24 * 60 * 60 * 1000;
         await user.save();
 
-        const verifyURL = `${process.env.FRONTEND_URL}/verify-email?token=${newToken}`;
+        const verifyURL = `${config.frontendUrl}/verify-email?token=${newToken}`;
 
-        await sendEmail(
-            email,
-            "Verify Email",
-            `<p>Click link to verify:</p>
-             <a href="${verifyURL}">${verifyURL}</a>`
-        );
+        await emailService.sendVerificationEmail(email, verifyURL, user.name);
 
         res.json({ message: "Verification email sent." });
 
     } catch (err) {
         res.status(500).json({ error: "Failed to resend verification" });
+    }
+};
+
+// ==================================================
+// CHANGE PASSWORD (AUTHENTICATED USERS)
+// ==================================================
+exports.changePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const userId = req.user._id;
+
+        if (!currentPassword) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "Current password is required" 
+            });
+        }
+        if (!newPassword) {
+            return res.status(400).json({ 
+                success: false, 
+                error: "New password is required" 
+            });
+        }
+
+        // Use the secure password change service
+        const result = await passwordResetService.changePassword(userId, currentPassword, newPassword);
+
+        if (!result.success) {
+            // Map specific error reasons to appropriate status codes
+            const errorMap = {
+                'user_not_found': { status: 404, message: 'User not found' },
+                'invalid_current_password': { status: 401, message: 'Current password is incorrect' },
+                'same_password': { status: 400, message: 'New password must be different from current password' },
+                'weak_password': { status: 400, message: 'Password does not meet requirements', details: result.details },
+                'server_error': { status: 500, message: 'Server error occurred' }
+            };
+
+            const errorInfo = errorMap[result.reason] || { status: 400, message: 'Password change failed' };
+            
+            return res.status(errorInfo.status).json({ 
+                success: false, 
+                error: errorInfo.message,
+                ...(result.details && { details: result.details })
+            });
+        }
+
+        // Send confirmation email
+        try {
+            await emailService.sendPasswordChangeConfirmation(req.user.email, req.user.name);
+        } catch (emailError) {
+            // Log but don't fail the change if email fails
+            console.error('Failed to send password change confirmation:', emailError);
+        }
+
+        res.json({ 
+            success: true, 
+            message: "Password changed successfully. Please log in again." 
+        });
+
+    } catch (err) {
+        console.error("CHANGE PASSWORD ERROR:", err);
+        res.status(500).json({ 
+            success: false, 
+            error: "Password change failed" 
+        });
     }
 };

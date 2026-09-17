@@ -19,6 +19,17 @@ const authMiddleware = async (req, res, next) => {
             return res.status(401).json({ success: false, error: 'Invalid or inactive user' });
         }
 
+        // Check token version for session invalidation after password change
+        // If the token's version doesn't match the user's current version, the token is invalid
+        if (decoded.tokenVersion !== undefined && user.tokenVersion !== undefined) {
+            if (decoded.tokenVersion !== user.tokenVersion) {
+                return res.status(401).json({ 
+                    success: false, 
+                    error: 'Session expired. Please log in again.' 
+                });
+            }
+        }
+
         req.user = user;
         req.userId = user._id;
 

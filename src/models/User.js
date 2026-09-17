@@ -77,6 +77,12 @@ const userSchema = new Schema({
     },
     accountLockedUntil: Date,
 
+    // Session invalidation for password changes
+    tokenVersion: {
+        type: Number,
+        default: 0
+    },
+
     // Preferences
     preferences: {
         notifications: {
